@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="0.1.0"
+
+# Resolve LIB_DIR relative to the script's real path (follows symlinks)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/../lib"
+
+# Source shared utilities
+source "$LIB_DIR/common.sh"
+
+show_help() {
+    cat <<'EOF'
+Usage: meetballs <command> [args...]
+
+Commands:
+  record       Record meeting audio from the microphone
+  transcribe   Transcribe a recording to text
+  ask          Ask questions about a transcript
+  list         List recordings and transcript status
+  doctor       Check dependencies and system readiness
+
+Options:
+  --help       Show this help message
+  --version    Show version
+
+Run 'meetballs <command> --help' for more information on a command.
+EOF
+}
+
+case "${1:-}" in
+    --help|"")
+        show_help
+        ;;
+    --version)
+        echo "meetballs $VERSION"
+        ;;
+    record)
+        shift
+        source "$LIB_DIR/record.sh"
+        cmd_record "$@"
+        ;;
+    transcribe)
+        shift
+        source "$LIB_DIR/transcribe.sh"
+        cmd_transcribe "$@"
+        ;;
+    ask)
+        shift
+        source "$LIB_DIR/ask.sh"
+        cmd_ask "$@"
+        ;;
+    list)
+        shift
+        source "$LIB_DIR/list.sh"
+        cmd_list "$@"
+        ;;
+    doctor)
+        shift
+        source "$LIB_DIR/doctor.sh"
+        cmd_doctor "$@"
+        ;;
+    *)
+        mb_error "Unknown command: $1"
+        mb_error "Run 'meetballs --help' for usage."
+        exit 1
+        ;;
+esac

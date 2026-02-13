@@ -1,0 +1,95 @@
+1..94
+ok 1 ask --help prints usage and exits 0
+ok 2 ask errors on missing transcript argument
+ok 3 ask errors on nonexistent transcript file
+ok 4 ask errors when claude CLI not available
+ok 5 single-shot mode calls claude with -p flag and question
+ok 6 interactive mode calls claude with --append-system-prompt
+ok 7 system prompt contains transcript content
+ok 8 MEETBALLS_DIR respects env override
+ok 9 RECORDINGS_DIR is MEETBALLS_DIR/recordings
+ok 10 TRANSCRIPTS_DIR is MEETBALLS_DIR/transcripts
+ok 11 WHISPER_MODEL defaults to base.en
+ok 12 MIN_DISK_MB is 500
+ok 13 mb_init creates recordings and transcripts directories
+ok 14 mb_init is idempotent
+ok 15 mb_format_duration 0 returns 0s
+ok 16 mb_format_duration 45 returns 45s
+ok 17 mb_format_duration 90 returns 1m30s
+ok 18 mb_format_duration 2712 returns 45m12s
+ok 19 mb_format_duration 3720 returns 1h02m00s
+ok 20 mb_format_duration 7200 returns 2h00m00s
+ok 21 mb_timestamp matches YYYY-MM-DDTHH-MM-SS format
+ok 22 mb_recording_dir echoes RECORDINGS_DIR
+ok 23 mb_transcript_dir echoes TRANSCRIPTS_DIR
+ok 24 mb_check_command returns 0 for existing command
+ok 25 mb_check_command returns 1 for missing command
+ok 26 mb_detect_audio_backend returns pw-record when all available
+ok 27 mb_detect_audio_backend returns parecord when no pw-record
+ok 28 mb_detect_audio_backend returns arecord as last fallback
+ok 29 mb_detect_audio_backend returns 1 when none available
+ok 30 mb_check_disk_space succeeds with sufficient space
+ok 31 mb_check_disk_space warns with low space
+ok 32 mb_info prints message
+ok 33 mb_success prints message
+ok 34 mb_warn prints to stderr
+ok 35 mb_error prints to stderr
+ok 36 mb_die prints error and exits 1
+ok 37 doctor --help prints usage and exits 0
+ok 38 doctor all deps present shows OK for each and All checks passed
+ok 39 doctor missing audio backend shows MISSING and exits 1
+ok 40 doctor missing whisper-cli shows MISSING and exits 1
+ok 41 doctor missing whisper model shows MISSING and exits 1
+ok 42 doctor missing claude shows MISSING and exits 1
+ok 43 doctor reports disk space with GB free
+ok 44 doctor low disk space shows LOW and exits 1
+ok 45 doctor exits 0 only when all checks pass
+ok 46 install.sh exists and is executable
+ok 47 install.sh checks bash version
+ok 48 install.sh creates ~/.local/bin directory
+ok 49 install.sh creates symlink to bin/meetballs
+ok 50 install.sh updates existing symlink
+ok 51 install.sh warns when ~/.local/bin not in PATH
+ok 52 install.sh is idempotent
+ok 53 install.sh runs meetballs doctor
+ok 54 install.sh skips bats install if already present
+ok 55 list --help prints usage and exits 0
+ok 56 list with no recordings prints no recordings message
+ok 57 list shows recording filenames in output
+ok 58 list output contains table header columns
+ok 59 list shows yes for recording with transcript
+ok 60 list shows no for recording without transcript
+ok 61 list shows correct duration for known-size WAV
+ok 62 list shows hour-format duration for long recording
+ok 63 list shows recordings sorted chronologically
+ok 64 meetballs --help prints usage and exits 0
+ok 65 meetballs with no arguments prints help and exits 0
+ok 66 meetballs no-args output matches --help output
+ok 67 meetballs --version prints version string and exits 0
+ok 68 meetballs unknown command prints error to stderr and exits 1
+ok 69 meetballs resolves LIB_DIR via symlink
+ok 70 meetballs sources common.sh successfully
+ok 71 meetballs help lists command descriptions
+ok 72 record --help prints usage and exits 0
+ok 73 record errors when no audio backend available
+ok 74 record creates WAV file in recordings directory
+ok 75 record output file has timestamp-based name
+ok 76 record prints duration on completion
+ok 77 record prints Recording message when started
+ok 78 record prints Saved with file path on completion
+ok 79 record uses parecord when pw-record unavailable
+ok 80 record warns on low disk space but continues
+ok 81 MEETBALLS_DIR is an isolated temp directory
+ok 82 MEETBALLS_DIR has recordings and transcripts subdirs
+ok 83 MOCK_BIN is on PATH
+ok 84 create_mock_command creates executable mock
+ok 85 bin/meetballs is executable
+ok 86 lib/common.sh is sourceable
+ok 87 LIB_DIR points to lib directory
+ok 88 transcribe --help prints usage and exits 0
+ok 89 transcribe errors on missing argument
+ok 90 transcribe errors on nonexistent file
+ok 91 transcribe errors when whisper-cli not available
+ok 92 transcribe creates transcript file in transcripts directory
+ok 93 transcribe prints transcript path on completion
+ok 94 transcribe handles empty whisper output gracefully
