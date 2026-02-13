@@ -204,3 +204,55 @@ teardown() {
     assert_failure
     assert_output --partial "fatal error"
 }
+
+# --- LIVE_DIR constant ---
+
+@test "LIVE_DIR is MEETBALLS_DIR/live" {
+    assert_equal "$LIVE_DIR" "$MEETBALLS_DIR/live"
+}
+
+# --- mb_init creates live directory ---
+
+@test "mb_init creates live directory" {
+    rm -rf "$MEETBALLS_DIR/live"
+    [ ! -d "$MEETBALLS_DIR/live" ]
+
+    mb_init
+
+    [ -d "$MEETBALLS_DIR/live" ]
+}
+
+# --- mb_find_whisper_model ---
+
+@test "mb_find_whisper_model returns path when found via WHISPER_CPP_MODEL_DIR" {
+    local model_dir="$MEETBALLS_DIR/whisper-models"
+    mkdir -p "$model_dir"
+    touch "$model_dir/ggml-base.en.bin"
+    export WHISPER_CPP_MODEL_DIR="$model_dir"
+
+    run mb_find_whisper_model
+    assert_success
+    assert_output "$model_dir/ggml-base.en.bin"
+}
+
+@test "mb_find_whisper_model returns path from default dir" {
+    local default_dir="$HOME/.local/share/whisper.cpp/models"
+    mkdir -p "$default_dir"
+    touch "$default_dir/ggml-base.en.bin"
+    unset WHISPER_CPP_MODEL_DIR
+
+    run mb_find_whisper_model
+    assert_success
+    assert_output "$default_dir/ggml-base.en.bin"
+
+    # Cleanup
+    rm -f "$default_dir/ggml-base.en.bin"
+}
+
+@test "mb_find_whisper_model returns 1 when model not found" {
+    unset WHISPER_CPP_MODEL_DIR
+
+    run mb_find_whisper_model
+    assert_failure
+    assert_output ""
+}

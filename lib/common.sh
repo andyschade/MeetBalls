@@ -5,6 +5,7 @@
 MEETBALLS_DIR="${MEETBALLS_DIR:-$HOME/.meetballs}"
 RECORDINGS_DIR="$MEETBALLS_DIR/recordings"
 TRANSCRIPTS_DIR="$MEETBALLS_DIR/transcripts"
+LIVE_DIR="$MEETBALLS_DIR/live"
 WHISPER_MODEL="${WHISPER_MODEL:-base.en}"
 MIN_DISK_MB=500
 
@@ -23,7 +24,7 @@ fi
 
 # Create recordings and transcripts directories
 mb_init() {
-    mkdir -p "$RECORDINGS_DIR" "$TRANSCRIPTS_DIR"
+    mkdir -p "$RECORDINGS_DIR" "$TRANSCRIPTS_DIR" "$LIVE_DIR"
 }
 
 # Messaging functions
@@ -64,6 +65,25 @@ mb_check_disk_space() {
         return 1
     fi
     return 0
+}
+
+# Find whisper model file in standard paths
+# Prints absolute path to stdout on success; returns 1 on failure
+mb_find_whisper_model() {
+    local model_file="ggml-${WHISPER_MODEL}.bin"
+    local search_dirs=(
+        "${WHISPER_CPP_MODEL_DIR:-}"
+        "$HOME/.local/share/whisper.cpp/models"
+        "/usr/local/share/whisper.cpp/models"
+    )
+    for dir in "${search_dirs[@]}"; do
+        [[ -z "$dir" ]] && continue
+        if [[ -f "$dir/$model_file" ]]; then
+            echo "$dir/$model_file"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Detect best available audio backend

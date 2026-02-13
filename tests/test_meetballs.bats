@@ -71,9 +71,21 @@ load test_helper
     run "$BIN_DIR/meetballs" --help
     assert_success
     # Each command should have a brief description
+    assert_output --partial "live transcription"
     assert_output --partial "Record meeting audio"
     assert_output --partial "Transcribe a recording"
     assert_output --partial "Ask questions"
     assert_output --partial "List recordings"
     assert_output --partial "Check dependencies"
+}
+
+@test "meetballs help lists live as first command before record" {
+    run "$BIN_DIR/meetballs" --help
+    assert_success
+    assert_output --partial "live"
+    # live should appear before record in output
+    local live_pos record_pos
+    live_pos=$(echo "$output" | grep -n "live" | head -1 | cut -d: -f1)
+    record_pos=$(echo "$output" | grep -n "record" | head -1 | cut -d: -f1)
+    [[ "$live_pos" -lt "$record_pos" ]]
 }

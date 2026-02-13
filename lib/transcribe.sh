@@ -35,23 +35,10 @@ EOF
     fi
 
     # Find whisper model
-    local model_file="ggml-${WHISPER_MODEL}.bin"
-    local model_path=""
-    local search_dirs=(
-        "${WHISPER_CPP_MODEL_DIR:-}"
-        "$HOME/.local/share/whisper.cpp/models"
-        "/usr/local/share/whisper.cpp/models"
-    )
-    for dir in "${search_dirs[@]}"; do
-        [[ -z "$dir" ]] && continue
-        if [[ -f "$dir/$model_file" ]]; then
-            model_path="$dir/$model_file"
-            break
-        fi
-    done
-
+    local model_path
+    model_path=$(mb_find_whisper_model) || true
     if [[ -z "$model_path" ]]; then
-        mb_die "Whisper model not found ($model_file). Download it with: whisper-cli -dl $WHISPER_MODEL"
+        mb_die "Whisper model not found (ggml-${WHISPER_MODEL}.bin). Download it with: whisper-cli -dl $WHISPER_MODEL"
     fi
 
     mb_init
