@@ -1,0 +1,2 @@
+2026-02-13T07:26:45.577698Z DEBUG ralph_core::config: Loading configuration from file path=ralph.yml
+2026-02-13T07:26:45.578239Z DEBUG ralph_core::config: Configuration loaded backend=claude has_v1_fields=false custom_hats=9
