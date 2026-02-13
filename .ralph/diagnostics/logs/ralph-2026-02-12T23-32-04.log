@@ -77,3 +77,8 @@
 2026-02-13T08:18:09.886154Z  INFO ralph::loop_runner: Completion event LOOP_COMPLETE detected.
 2026-02-13T08:18:09.886169Z  INFO ralph_core::event_loop: Wrapping up: completed. 15 iterations in 46m 4s. reason=completed iterations=15 duration=46m 4s
 2026-02-13T08:18:09.888945Z  INFO ralph_core::landing: Beginning landing sequence loop_id=primary
+2026-02-13T08:18:09.912988Z  INFO ralph_core::landing: Auto-committed changes during landing loop_id=primary commit=Some("dbff96afbe28d8debf6b1489e259efd8f98531e2") files=18
+2026-02-13T08:18:09.928520Z  INFO ralph_core::landing: Generated handoff file loop_id=primary path=/home/andy/Projects/MeetBalls/.ralph/agent/handoff.md completed=0 open=0
+2026-02-13T08:18:09.930964Z  INFO ralph_core::loop_completion: Landing completed with auto-commit commit=Some("dbff96afbe28d8debf6b1489e259efd8f98531e2") handoff=/home/andy/Projects/MeetBalls/.ralph/agent/handoff.md
+2026-02-13T08:18:09.931033Z  INFO ralph::loop_runner: Primary loop landed successfully committed=true handoff=/home/andy/Projects/MeetBalls/.ralph/agent/handoff.md open_tasks=0
+2026-02-13T08:19:01.302400Z  INFO ralph_tui::app: Ctrl+C detected, signaling main loop
