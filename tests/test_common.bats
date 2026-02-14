@@ -319,3 +319,106 @@ setup() {
     assert_failure
     assert_output ""
 }
+
+# --- LOGS_DIR constant ---
+
+@test "LOGS_DIR is MEETBALLS_DIR/logs" {
+    assert_equal "$LOGS_DIR" "$MEETBALLS_DIR/logs"
+}
+
+# --- mb_init creates logs directory ---
+
+@test "mb_init creates logs directory" {
+    rm -rf "$MEETBALLS_DIR/logs"
+    [ ! -d "$MEETBALLS_DIR/logs" ]
+
+    mb_init
+
+    [ -d "$MEETBALLS_DIR/logs" ]
+}
+
+# --- mb_log ---
+
+@test "mb_log is no-op when MB_LOG_FILE unset" {
+    unset MB_LOG_FILE
+    run mb_log "should not appear"
+    assert_success
+    assert_output ""
+}
+
+@test "mb_log writes timestamped line to log file" {
+    export MB_LOG_FILE="$MEETBALLS_DIR/test.log"
+    mb_log "hello world"
+    [ -f "$MB_LOG_FILE" ]
+    run cat "$MB_LOG_FILE"
+    assert_output --regexp '^\[.+\] hello world$'
+}
+
+# --- mb_collect_system_state ---
+
+@test "mb_collect_system_state outputs key=value pairs" {
+    run mb_collect_system_state
+    assert_success
+    assert_output --partial "audio_backend="
+    assert_output --partial "whisper_model_path="
+    assert_output --partial "disk_free_mb="
+    assert_output --partial "pulseaudio_status="
+    assert_output --partial "timestamp="
+}
+
+# --- mb_gather_context ---
+
+@test "mb_gather_context wraps file contents in XML tags" {
+    local testfile="$MEETBALLS_DIR/hello.txt"
+    echo "hello world" > "$testfile"
+
+    run mb_gather_context "$testfile"
+    assert_success
+    assert_output --partial "<file path=\"$testfile\">"
+    assert_output --partial "hello world"
+    assert_output --partial "</file>"
+}
+
+@test "mb_gather_context includes directory tree and key files" {
+    local testdir="$MEETBALLS_DIR/project"
+    mkdir -p "$testdir"
+    echo '{"name": "test"}' > "$testdir/package.json"
+    mkdir -p "$testdir/src"
+    touch "$testdir/src/index.js"
+
+    run mb_gather_context "$testdir"
+    assert_success
+    assert_output --partial "<directory path=\"$testdir\">"
+    assert_output --partial "<tree>"
+    assert_output --partial "package.json"
+    assert_output --partial "</directory>"
+}
+
+@test "mb_gather_context warns on nonexistent path" {
+    run mb_gather_context "/nonexistent/path"
+    assert_success
+    assert_output --partial "Context path not found"
+}
+
+@test "mb_gather_context enforces size limit" {
+    local testfile="$MEETBALLS_DIR/big.txt"
+    # Create a file larger than 100KB
+    dd if=/dev/zero bs=1024 count=110 of="$testfile" 2>/dev/null
+    export MAX_CONTEXT_BYTES=1024
+
+    run mb_gather_context "$testfile"
+    assert_success
+    assert_output --partial "would exceed"
+}
+
+@test "mb_gather_context handles multiple paths" {
+    local file1="$MEETBALLS_DIR/a.txt"
+    local file2="$MEETBALLS_DIR/b.txt"
+    echo "alpha" > "$file1"
+    echo "beta" > "$file2"
+
+    run mb_gather_context "$file1" "$file2"
+    assert_success
+    assert_output --partial "alpha"
+    assert_output --partial "beta"
+}

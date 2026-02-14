@@ -30,7 +30,8 @@ isolate_path() {
     ISOLATED_BIN="$(mktemp -d)"
     local cmds=(bash dirname readlink basename mkdir cat awk wc env
                 sed grep chmod rm mktemp touch sort date id stat
-                find sleep truncate ls head tail tr cut tee ln pwd)
+                find sleep truncate ls head tail tr cut tee ln pwd
+                cp df printf)
     for cmd in "${cmds[@]}"; do
         local p
         p="$(command -v "$cmd" 2>/dev/null)" && ln -sf "$p" "$ISOLATED_BIN/$cmd"

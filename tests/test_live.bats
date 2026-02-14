@@ -125,3 +125,137 @@ esac'
     new_line=$(grep -n "new-session" <<< "$calls" | head -1 | cut -d: -f1)
     [[ "$kill_line" -lt "$new_line" ]]
 }
+
+# --- Stderr redirect & loading indicator ---
+
+@test "transcriber.sh redirects whisper-stream stderr to file" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+
+    run cat "$session_dir/transcriber.sh"
+    assert_output --partial "whisper-stream.stderr"
+}
+
+@test "transcriber.sh contains loading model text" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+
+    run cat "$session_dir/transcriber.sh"
+    assert_output --partial "Loading model"
+}
+
+@test "transcriber.sh sources common.sh" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+
+    run cat "$session_dir/transcriber.sh"
+    assert_output --partial "source"
+    assert_output --partial "common.sh"
+}
+
+# --- Session logging ---
+
+@test "live creates session log file" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    [[ -f "$session_dir/session.log" ]]
+}
+
+@test "live copies session log to logs directory" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    # Should have a log in the logs dir
+    local log_files=("$MEETBALLS_DIR/logs"/*.log)
+    [[ -f "${log_files[0]}" ]]
+}
+
+# --- --context flag ---
+
+@test "live --context creates project-context.txt in session dir" {
+    setup_live_deps
+
+    local context_file="$MEETBALLS_DIR/README.md"
+    echo "# Test Project" > "$context_file"
+
+    run "$BIN_DIR/meetballs" live --context "$context_file"
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    [[ -f "$session_dir/project-context.txt" ]]
+    run cat "$session_dir/project-context.txt"
+    assert_output --partial "Test Project"
+}
+
+@test "live --context asker.sh references project-context.txt" {
+    setup_live_deps
+
+    local context_file="$MEETBALLS_DIR/README.md"
+    echo "# Test" > "$context_file"
+
+    run "$BIN_DIR/meetballs" live --context "$context_file"
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/asker.sh"
+    assert_output --partial "project-context"
+}
+
+# --- --save-here flag ---
+
+@test "live --save-here creates ./meetballs/ directory" {
+    setup_live_deps
+
+    # Create a transcript so there's something to save
+    # We need to pre-create transcript in the session dir that will be made
+    # The mock tmux doesn't actually run transcriber.sh, so we simulate
+
+    local save_dir
+    save_dir=$(mktemp -d)
+    cd "$save_dir"
+
+    run "$BIN_DIR/meetballs" live --save-here
+    assert_success
+
+    # The ./meetballs/ directory should have been created
+    [[ -d "$save_dir/meetballs" ]]
+}
+
+# --- Q&A logging ---
+
+@test "asker.sh contains QA_LOG variable" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/asker.sh"
+    assert_output --partial "QA_LOG"
+    assert_output --partial "qa.log"
+}

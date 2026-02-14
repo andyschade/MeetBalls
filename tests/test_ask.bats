@@ -117,3 +117,24 @@ exit 0
     run cat "$args_file"
     assert_output --partial "Bob will deploy on Friday"
 }
+
+# --- --context flag ---
+
+@test "ask --context includes project context in system prompt" {
+    local transcript_file
+    transcript_file=$(create_fixture_transcript "meeting.txt" "Discussed the API")
+    create_mock_claude
+
+    local context_file="$MEETBALLS_DIR/README.md"
+    echo "# My Project" > "$context_file"
+
+    run "$BIN_DIR/meetballs" ask --context "$context_file" "$transcript_file" "What about the API?"
+    assert_success
+
+    local args_file="$MOCK_BIN/claude_args.txt"
+    [ -f "$args_file" ]
+
+    run cat "$args_file"
+    assert_output --partial "project-context"
+    assert_output --partial "My Project"
+}

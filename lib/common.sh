@@ -6,6 +6,7 @@ MEETBALLS_DIR="${MEETBALLS_DIR:-$HOME/.meetballs}"
 RECORDINGS_DIR="$MEETBALLS_DIR/recordings"
 TRANSCRIPTS_DIR="$MEETBALLS_DIR/transcripts"
 LIVE_DIR="$MEETBALLS_DIR/live"
+LOGS_DIR="$MEETBALLS_DIR/logs"
 WHISPER_MODEL="${WHISPER_MODEL:-base.en}"
 MIN_DISK_MB=500
 
@@ -24,7 +25,7 @@ fi
 
 # Create recordings and transcripts directories
 mb_init() {
-    mkdir -p "$RECORDINGS_DIR" "$TRANSCRIPTS_DIR" "$LIVE_DIR"
+    mkdir -p "$RECORDINGS_DIR" "$TRANSCRIPTS_DIR" "$LIVE_DIR" "$LOGS_DIR"
 }
 
 # Messaging functions
@@ -47,6 +48,53 @@ mb_error() {
 mb_die() {
     mb_error "$@"
     exit 1
+}
+
+# Append timestamped line to session log (no-op if MB_LOG_FILE unset)
+mb_log() {
+    [[ -n "${MB_LOG_FILE:-}" ]] || return 0
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$MB_LOG_FILE"
+}
+
+# Print key=value system state for diagnostics
+mb_collect_system_state() {
+    local audio_backend disk_free_mb pulse_status model_path
+    audio_backend=$(mb_detect_audio_backend 2>/dev/null) || audio_backend="none"
+    model_path=$(mb_find_whisper_model 2>/dev/null) || model_path="not found"
+    disk_free_mb=$(df -k "$MEETBALLS_DIR" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1024}') || disk_free_mb="unknown"
+    if mb_check_command pactl && pactl info >/dev/null 2>&1; then
+        pulse_status="running"
+    else
+        pulse_status="not running"
+    fi
+    echo "audio_backend=$audio_backend"
+    echo "whisper_model_path=$model_path"
+    echo "disk_free_mb=$disk_free_mb"
+    echo "pulseaudio_status=$pulse_status"
+    echo "timestamp=$(date '+%Y-%m-%d %H:%M:%S')"
+}
+
+# Structured diagnostic dump on failure
+# Usage: mb_diagnostic_dump <error_msg> <exit_code> <failed_command> [stderr_log_path]
+mb_diagnostic_dump() {
+    local error_msg="$1" exit_code="$2" failed_cmd="$3" stderr_log="${4:-}"
+    local dump=""
+    dump+="=== DIAGNOSTIC DUMP ==="$'\n'
+    dump+="error: $error_msg"$'\n'
+    dump+="exit_code: $exit_code"$'\n'
+    dump+="failed_command: $failed_cmd"$'\n'
+    if [[ -n "$stderr_log" ]] && [[ -f "$stderr_log" ]]; then
+        dump+="--- last 30 lines of stderr ---"$'\n'
+        dump+="$(tail -n 30 "$stderr_log")"$'\n'
+        dump+="--- end stderr ---"$'\n'
+    fi
+    dump+="--- system state ---"$'\n'
+    dump+="$(mb_collect_system_state)"$'\n'
+    dump+="=== END DIAGNOSTIC DUMP ==="
+    if [[ -n "${MB_LOG_FILE:-}" ]]; then
+        echo "$dump" >> "$MB_LOG_FILE"
+    fi
+    echo "$dump" >&2
 }
 
 # Check if a command exists
@@ -154,4 +202,67 @@ mb_wav_duration() {
 # Echo ISO timestamp for filenames
 mb_timestamp() {
     date +"%Y-%m-%dT%H-%M-%S"
+}
+
+# --- Project context gathering ---
+
+MAX_CONTEXT_BYTES="${MAX_CONTEXT_BYTES:-102400}"
+
+_MB_KEY_FILES=(
+    README.md CLAUDE.md Makefile package.json Cargo.toml go.mod
+    pyproject.toml setup.py setup.cfg requirements.txt
+    CMakeLists.txt build.gradle pom.xml composer.json Gemfile
+    .env.example tsconfig.json deno.json
+)
+
+# Gather context from files/directories for Claude
+# Writes XML-wrapped content to stdout; warns on stderr
+mb_gather_context() {
+    local cumulative=0
+    local path
+    for path in "$@"; do
+        if [[ ! -e "$path" ]]; then
+            mb_warn "Context path not found: $path"
+            continue
+        fi
+
+        if [[ -f "$path" ]]; then
+            local size
+            size=$(stat -c %s "$path" 2>/dev/null) || size=0
+            if (( cumulative + size > MAX_CONTEXT_BYTES )); then
+                mb_warn "Skipping $path — would exceed ${MAX_CONTEXT_BYTES}-byte context limit"
+                continue
+            fi
+            cumulative=$(( cumulative + size ))
+            echo "<file path=\"$path\">"
+            cat "$path"
+            echo "</file>"
+
+        elif [[ -d "$path" ]]; then
+            # Directory tree (max 3 levels, 200 lines)
+            echo "<directory path=\"$path\">"
+            echo "<tree>"
+            find "$path" -maxdepth 3 -not -path '*/\.*' | head -200
+            echo "</tree>"
+
+            # Include key files found in this directory
+            local key_file
+            for key_file in "${_MB_KEY_FILES[@]}"; do
+                local full="$path/$key_file"
+                if [[ -f "$full" ]]; then
+                    local size
+                    size=$(stat -c %s "$full" 2>/dev/null) || size=0
+                    if (( cumulative + size > MAX_CONTEXT_BYTES )); then
+                        mb_warn "Skipping $full — would exceed ${MAX_CONTEXT_BYTES}-byte context limit"
+                        continue
+                    fi
+                    cumulative=$(( cumulative + size ))
+                    echo "<file path=\"$full\">"
+                    cat "$full"
+                    echo "</file>"
+                fi
+            done
+            echo "</directory>"
+        fi
+    done
 }

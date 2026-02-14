@@ -1,9 +1,14 @@
 # MeetBalls — Live command: real-time transcription with Q&A via tmux split-pane
 
 cmd_live() {
-    if [[ "${1:-}" == "--help" ]]; then
-        cat <<'EOF'
-Usage: meetballs live
+    local context_paths=()
+    local save_here=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help)
+                cat <<'EOF'
+Usage: meetballs live [options]
 
 Start a live transcription session with interactive Q&A.
 
@@ -14,13 +19,31 @@ Opens a tmux split-pane TUI:
 On exit, transcript and audio are saved to ~/.meetballs/.
 
 Options:
-  --help    Show this help message
+  --context <path>   Add project file/directory as context for Q&A (repeatable)
+  --save-here        Also save transcript, recording, and Q&A log to ./meetballs/
+  --help             Show this help message
 
 Examples:
   meetballs live
+  meetballs live --context .
+  meetballs live --context ./src --context README.md --save-here
 EOF
-        return 0
-    fi
+                return 0
+                ;;
+            --context)
+                [[ -n "${2:-}" ]] || mb_die "--context requires a path argument"
+                context_paths+=("$2")
+                shift 2
+                ;;
+            --save-here)
+                save_here=true
+                shift
+                ;;
+            *)
+                mb_die "Unknown option: $1. Run 'meetballs live --help' for usage."
+                ;;
+        esac
+    done
 
     # Validate dependencies (order matters — most fundamental first)
     mb_require_command tmux "Install: sudo apt install tmux"
@@ -54,9 +77,24 @@ EOF
     local SESSION_DIR="$LIVE_DIR/$TIMESTAMP"
     mkdir -p "$SESSION_DIR"
 
+    # Session logging
+    local LOG_FILE="$SESSION_DIR/session.log"
+    local WHISPER_STDERR="$SESSION_DIR/whisper-stream.stderr"
+    local CLAUDE_STDERR="$SESSION_DIR/claude.stderr"
+    export MB_LOG_FILE="$LOG_FILE"
+    mb_log "session started"
+
+    # Generate project context if --context was used
+    if [[ ${#context_paths[@]} -gt 0 ]]; then
+        mb_gather_context "${context_paths[@]}" > "$SESSION_DIR/project-context.txt"
+        mb_log "project context generated (${#context_paths[@]} paths)"
+    fi
+
     # Generate transcriber.sh (unquoted heredoc — variables expand at write time)
     cat > "$SESSION_DIR/transcriber.sh" <<EOF
 #!/usr/bin/env bash
+source "$LIB_DIR/common.sh"
+export MB_LOG_FILE="$SESSION_DIR/session.log"
 cd "$SESSION_DIR"
 
 # --- Audio environment setup ---
@@ -87,9 +125,20 @@ wait_for_pulseaudio() {
     return 1
 }
 
-echo "Starting live transcription... (Ctrl+C to stop)"
-echo "Model: $WHISPER_MODEL"
-echo "---"
+printf "Loading model... (this takes a few seconds)"
+
+# Background watcher: replace loading line once transcript appears
+(
+    while true; do
+        if [[ -f "$SESSION_DIR/transcript.txt" ]] && [[ -s "$SESSION_DIR/transcript.txt" ]]; then
+            printf "\rReady — listening.                        \n"
+            echo "---"
+            break
+        fi
+        sleep 0.5
+    done
+) &
+_WATCHER_PID=\$!
 
 # --- Main loop: auto-restart on audio drops ---
 # Resets retry counter on successful runs (>30s = real transcription, not instant crash)
@@ -107,19 +156,21 @@ while [[ \$retry_count -lt \$max_retries ]] && [[ "\$user_quit" != true ]]; do
 
     start_time=\$(date +%s)
 
+    mb_log "whisper-stream starting (attempt \$((retry_count + 1)))"
     whisper-stream \\
         -m "$model_path" \\
         --step 3000 \\
         --length 10000 \\
         -f "$SESSION_DIR/transcript.txt" \\
         --save-audio \\
-        -l en
+        -l en 2>>"$SESSION_DIR/whisper-stream.stderr"
 
     exit_code=\$?
     run_duration=\$(( \$(date +%s) - start_time ))
 
     # Ctrl+C (130) or clean exit (0) — user wants to stop
     if [[ \$exit_code -eq 0 ]] || [[ \$exit_code -eq 130 ]]; then
+        mb_log "user quit (exit_code=\$exit_code)"
         user_quit=true
         break
     fi
@@ -130,17 +181,23 @@ while [[ \$retry_count -lt \$max_retries ]] && [[ "\$user_quit" != true ]]; do
     fi
 
     retry_count=\$((retry_count + 1))
+    mb_log "whisper-stream stopped (code=\$exit_code, ran=\${run_duration}s, retry=\$retry_count/\$max_retries)"
     echo ""
     echo "[whisper-stream stopped (code \$exit_code, ran \${run_duration}s) — restarting \$retry_count/\$max_retries...]"
     sleep 2
 done
 
+kill \$_WATCHER_PID 2>/dev/null || true
+
 if [[ "\$user_quit" == true ]]; then
+    mb_log "session ended by user"
     tmux kill-session -t meetballs-live 2>/dev/null
 elif [[ \$retry_count -ge \$max_retries ]]; then
+    mb_diagnostic_dump "whisper-stream failed \$max_retries times" "\$exit_code" "whisper-stream" "$SESSION_DIR/whisper-stream.stderr"
     echo ""
     echo "whisper-stream failed \$max_retries times. Audio device may be unavailable."
     echo "Check: is your mic connected? Try 'pactl info' in another terminal."
+    echo "Diagnostic dump saved — run 'meetballs logs --last' to view."
     echo "Press Enter to close session..."
     read -r
     tmux kill-session -t meetballs-live 2>/dev/null
@@ -152,6 +209,7 @@ EOF
     cat > "$SESSION_DIR/asker.sh" <<EOF
 #!/usr/bin/env bash
 TRANSCRIPT_FILE="$SESSION_DIR/transcript.txt"
+QA_LOG="$SESSION_DIR/qa.log"
 
 echo "Meeting Q&A — type a question, or 'quit' to end session"
 echo ""
@@ -187,7 +245,23 @@ Be concise and specific. If the answer isn't in the transcript, say so.
 \${transcript}
 </transcript>"
 
-    claude -p "\$question" --append-system-prompt "\$system_prompt"
+    # Append project context if available
+    if [[ -f "$SESSION_DIR/project-context.txt" ]]; then
+        system_prompt="\${system_prompt}
+
+<project-context>
+\$(<"$SESSION_DIR/project-context.txt")
+</project-context>"
+    fi
+
+    # Log question
+    echo "Q: \$question" >> "\$QA_LOG"
+
+    # Call Claude, tee answer to log and terminal
+    answer=\$(claude -p "\$question" --append-system-prompt "\$system_prompt" 2>>"$SESSION_DIR/claude.stderr")
+    echo "\$answer"
+    echo "A: \$answer" >> "\$QA_LOG"
+    echo "---" >> "\$QA_LOG"
     echo ""
 done
 
@@ -217,6 +291,7 @@ EOF
     # --- Cleanup ---
     local saved_transcript=false
     local saved_recording=false
+    local saved_qa=false
 
     if [[ -f "$SESSION_DIR/transcript.txt" ]]; then
         cp "$SESSION_DIR/transcript.txt" "$TRANSCRIPTS_DIR/$TIMESTAMP.txt" || true
@@ -228,21 +303,44 @@ EOF
         saved_recording=true
     fi
 
+    if [[ -f "$SESSION_DIR/qa.log" ]]; then
+        cp "$SESSION_DIR/qa.log" "$LOGS_DIR/$TIMESTAMP.qa.log" || true
+        saved_qa=true
+    fi
+
+    # Copy session log to logs directory
+    if [[ -f "$LOG_FILE" ]]; then
+        cp "$LOG_FILE" "$LOGS_DIR/$TIMESTAMP.log" || true
+    fi
+
     echo ""
     mb_info "Session ended."
     if [[ "$saved_transcript" == true ]]; then
         mb_success "Transcript saved: $TRANSCRIPTS_DIR/$TIMESTAMP.txt"
-    else
-        mb_info "No transcript to save."
     fi
     if [[ "$saved_recording" == true ]]; then
         mb_success "Recording saved: $RECORDINGS_DIR/$TIMESTAMP.wav"
-    else
-        mb_info "No recording to save."
+    fi
+    if [[ "$saved_qa" == true ]]; then
+        mb_success "Q&A log saved: $LOGS_DIR/$TIMESTAMP.qa.log"
     fi
 
-    # Remove session directory only after successful copy of both files
-    if [[ "$saved_transcript" == true ]] && [[ "$saved_recording" == true ]]; then
-        rm -rf "$SESSION_DIR"
+    # --save-here: copy artifacts to ./meetballs/ in the working directory
+    if [[ "$save_here" == true ]]; then
+        mkdir -p ./meetballs
+        if [[ "$saved_transcript" == true ]]; then
+            cp "$TRANSCRIPTS_DIR/$TIMESTAMP.txt" ./meetballs/transcript.txt || true
+            mb_success "Copied transcript to ./meetballs/transcript.txt"
+        fi
+        if [[ "$saved_recording" == true ]]; then
+            cp "$RECORDINGS_DIR/$TIMESTAMP.wav" ./meetballs/recording.wav || true
+            mb_success "Copied recording to ./meetballs/recording.wav"
+        fi
+        if [[ "$saved_qa" == true ]]; then
+            cp "$LOGS_DIR/$TIMESTAMP.qa.log" ./meetballs/qa.log || true
+            mb_success "Copied Q&A log to ./meetballs/qa.log"
+        fi
     fi
+
+    mb_log "session cleanup complete"
 }

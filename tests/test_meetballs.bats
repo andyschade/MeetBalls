@@ -11,6 +11,7 @@ load test_helper
     assert_output --partial "transcribe"
     assert_output --partial "ask"
     assert_output --partial "list"
+    assert_output --partial "logs"
     assert_output --partial "doctor"
 }
 
@@ -22,6 +23,7 @@ load test_helper
     assert_output --partial "transcribe"
     assert_output --partial "ask"
     assert_output --partial "list"
+    assert_output --partial "logs"
     assert_output --partial "doctor"
 }
 

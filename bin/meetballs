@@ -28,6 +28,7 @@ Commands:
   transcribe   Transcribe a recording to text
   ask          Ask questions about a transcript
   list         List recordings and transcript status
+  logs         View session logs and diagnostic dumps
   update       Pull latest code and check for rebuild needs
   doctor       Check dependencies and system readiness
 
@@ -70,6 +71,11 @@ case "${1:-}" in
         shift
         source "$LIB_DIR/list.sh"
         cmd_list "$@"
+        ;;
+    logs)
+        shift
+        source "$LIB_DIR/logs.sh"
+        cmd_logs "$@"
         ;;
     update)
         shift
