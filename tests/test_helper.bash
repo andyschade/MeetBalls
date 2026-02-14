@@ -11,7 +11,7 @@ BIN_DIR="$PROJECT_ROOT/bin"
 load "$TEST_DIR/libs/bats-support/load"
 load "$TEST_DIR/libs/bats-assert/load"
 
-setup() {
+common_setup() {
     # Create isolated temp directory for MEETBALLS_DIR
     export MEETBALLS_DIR="$(mktemp -d)"
     mkdir -p "$MEETBALLS_DIR/recordings" "$MEETBALLS_DIR/transcripts"
@@ -21,10 +21,39 @@ setup() {
     export PATH="$MOCK_BIN:$PATH"
 }
 
-teardown() {
+# Helper: restrict PATH to MOCK_BIN + only essential system utilities.
+# On modern Linux /bin -> /usr/bin, so we can't use /bin directly without
+# leaking real commands like parecord, tmux, dpkg into tests.
+# Call this in individual tests or setup() when command isolation is needed.
+isolate_path() {
+    ORIG_PATH="$PATH"
+    ISOLATED_BIN="$(mktemp -d)"
+    local cmds=(bash dirname readlink basename mkdir cat awk wc env
+                sed grep chmod rm mktemp touch sort date id stat
+                find sleep truncate ls head tail tr cut tee ln pwd)
+    for cmd in "${cmds[@]}"; do
+        local p
+        p="$(command -v "$cmd" 2>/dev/null)" && ln -sf "$p" "$ISOLATED_BIN/$cmd"
+    done
+    export PATH="$MOCK_BIN:$ISOLATED_BIN"
+}
+
+common_teardown() {
+    # Restore original PATH if isolate_path was used
+    if [[ -n "${ORIG_PATH:-}" ]]; then export PATH="$ORIG_PATH"; fi
     # Clean up temp directories
-    [[ -d "${MEETBALLS_DIR:-}" ]] && rm -rf "$MEETBALLS_DIR"
-    [[ -d "${MOCK_BIN:-}" ]] && rm -rf "$MOCK_BIN"
+    if [[ -d "${MEETBALLS_DIR:-}" ]]; then rm -rf "$MEETBALLS_DIR"; fi
+    if [[ -d "${MOCK_BIN:-}" ]]; then rm -rf "$MOCK_BIN"; fi
+    if [[ -d "${ISOLATED_BIN:-}" ]]; then rm -rf "$ISOLATED_BIN"; fi
+}
+
+# Default setup/teardown — files that don't override get these
+setup() {
+    common_setup
+}
+
+teardown() {
+    common_teardown
 }
 
 # Helper: create a mock command in MOCK_BIN

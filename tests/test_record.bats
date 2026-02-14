@@ -3,18 +3,9 @@
 
 load test_helper
 
-# Use a restricted PATH so only mocked commands are found.
 setup() {
-    export MEETBALLS_DIR="$(mktemp -d)"
-    mkdir -p "$MEETBALLS_DIR/recordings" "$MEETBALLS_DIR/transcripts"
-
-    MOCK_BIN="$(mktemp -d)"
-    export PATH="$MOCK_BIN:/usr/bin:/bin"
-}
-
-teardown() {
-    [[ -d "${MEETBALLS_DIR:-}" ]] && rm -rf "$MEETBALLS_DIR"
-    [[ -d "${MOCK_BIN:-}" ]] && rm -rf "$MOCK_BIN"
+    common_setup
+    isolate_path
 }
 
 # Helper: create a mock audio backend that creates a WAV file then exits.

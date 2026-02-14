@@ -3,24 +3,16 @@
 
 load test_helper
 
-# Use a restricted PATH in all tests so only mocked commands are found.
 setup() {
-    export MEETBALLS_DIR="$(mktemp -d)"
-    mkdir -p "$MEETBALLS_DIR/recordings" "$MEETBALLS_DIR/transcripts"
-
-    MOCK_BIN="$(mktemp -d)"
-    export PATH="$MOCK_BIN:/usr/bin:/bin"
-}
-
-teardown() {
-    [[ -d "${MEETBALLS_DIR:-}" ]] && rm -rf "$MEETBALLS_DIR"
-    [[ -d "${MOCK_BIN:-}" ]] && rm -rf "$MOCK_BIN"
+    common_setup
+    isolate_path
 }
 
 # Helper: set up all deps so cmd_live can run to completion
 setup_live_deps() {
     create_mock_command "whisper-stream"
     create_mock_command "claude"
+    create_mock_command "pactl"
     create_mock_command "tmux" '
 echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
 case "$1" in
@@ -47,26 +39,13 @@ esac'
 # --- Dependency validation ---
 
 @test "live missing tmux exits 1 with error" {
-    # Use fully isolated PATH — only symlink needed utilities, not tmux
-    local ISOLATED_BIN="$(mktemp -d)"
-    local SAVED_PATH="$PATH"
-    for cmd in awk basename cat chmod date dirname df env grep head mkdir \
-               mktemp pwd readlink rm sed stat; do
-        local src
-        src=$(command -v "$cmd" 2>/dev/null) && ln -sf "$src" "$ISOLATED_BIN/$cmd"
-    done
-    ln -sf "$(command -v bash)" "$ISOLATED_BIN/bash"
-
     # No tmux mock → missing
     create_mock_command "whisper-stream"
     create_mock_command "claude"
 
-    PATH="$MOCK_BIN:$ISOLATED_BIN" run "$BIN_DIR/meetballs" live
-    export PATH="$SAVED_PATH"
+    run "$BIN_DIR/meetballs" live
     assert_failure
     assert_output --partial "tmux"
-
-    rm -rf "$ISOLATED_BIN"
 }
 
 @test "live missing whisper-stream exits 1 with error" {
@@ -93,9 +72,10 @@ esac'
     create_mock_command "whisper-stream"
     create_mock_command "claude"
     # No model file, no WHISPER_CPP_MODEL_DIR
+    # Set HOME to temp dir to prevent finding the real model on disk
     unset WHISPER_CPP_MODEL_DIR 2>/dev/null || true
 
-    run "$BIN_DIR/meetballs" live
+    HOME="$MEETBALLS_DIR" run "$BIN_DIR/meetballs" live
     assert_failure
     assert_output --partial "model"
 }

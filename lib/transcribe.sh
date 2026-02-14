@@ -25,28 +25,17 @@ EOF
 
     local recording_file="$1"
 
-    if [[ ! -f "$recording_file" ]]; then
-        mb_die "Recording file not found: $recording_file"
-    fi
+    mb_require_file "$recording_file" "Recording file"
+    mb_require_command whisper-cli "Install it from https://github.com/ggerganov/whisper.cpp"
 
-    # Check whisper-cli is available
-    if ! mb_check_command whisper-cli; then
-        mb_die "whisper-cli not found. Install it from https://github.com/ggerganov/whisper.cpp"
-    fi
-
-    # Find whisper model
     local model_path
-    model_path=$(mb_find_whisper_model) || true
-    if [[ -z "$model_path" ]]; then
-        mb_die "Whisper model not found (ggml-${WHISPER_MODEL}.bin). Download it with: whisper-cli -dl $WHISPER_MODEL"
-    fi
+    model_path=$(mb_require_whisper_model)
 
     mb_init
 
     # Warn if recording is longer than 2 hours
-    local file_size
-    file_size=$(stat -c %s "$recording_file")
-    local duration_secs=$(( (file_size - 44) / (16000 * 2) ))
+    local duration_secs
+    duration_secs=$(mb_wav_duration "$recording_file")
     if (( duration_secs > 7200 )); then
         mb_warn "Recording is over 2 hours ($(mb_format_duration "$duration_secs")). Transcription may take a while."
     fi

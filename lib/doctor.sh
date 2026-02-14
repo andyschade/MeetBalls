@@ -23,7 +23,7 @@ EOF
 
     mb_info "Checking dependencies..."
 
-    # 1. Audio backend
+    # 1. Audio backend (command exists)
     local backend
     if backend=$(mb_detect_audio_backend 2>/dev/null); then
         case "$backend" in
@@ -35,6 +35,19 @@ EOF
     else
         mb_info "  audio:          MISSING — install pipewire, pulseaudio, or alsa-utils"
         core_failures=$((core_failures + 1))
+    fi
+
+    # 1b. Audio connectivity (can actually reach the audio server)
+    if mb_check_command pactl; then
+        if pactl info >/dev/null 2>&1; then
+            local source_count
+            source_count=$(pactl list sources short 2>/dev/null | wc -l)
+            mb_info "  audio server:   OK ($source_count source(s) available)"
+        else
+            mb_info "  audio server:   DOWN — PulseAudio not responding"
+            mb_info "                  WSL2 fix: close all terminals, run 'wsl --shutdown' in PowerShell"
+            core_failures=$((core_failures + 1))
+        fi
     fi
 
     # 2. whisper-cli
@@ -49,7 +62,7 @@ EOF
     if mb_find_whisper_model >/dev/null 2>&1; then
         mb_info "  model:          OK ($WHISPER_MODEL)"
     else
-        mb_info "  model:          MISSING — download with: whisper-cli -dl $WHISPER_MODEL"
+        mb_info "  model:          MISSING — download: bash ~/whisper.cpp/models/download-ggml-model.sh $WHISPER_MODEL"
         core_failures=$((core_failures + 1))
     fi
 

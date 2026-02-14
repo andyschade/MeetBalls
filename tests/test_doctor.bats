@@ -3,27 +3,13 @@
 
 load test_helper
 
-# Use a restricted PATH in all tests so only mocked commands are found.
-# This prevents real system commands (claude, pw-record, etc.) from
-# leaking into "missing dependency" tests.
-setup() {
-    export MEETBALLS_DIR="$(mktemp -d)"
-    mkdir -p "$MEETBALLS_DIR/recordings" "$MEETBALLS_DIR/transcripts"
-
-    MOCK_BIN="$(mktemp -d)"
-    export PATH="$MOCK_BIN:/usr/bin:/bin"
-}
-
-teardown() {
-    [[ -d "${MEETBALLS_DIR:-}" ]] && rm -rf "$MEETBALLS_DIR"
-    [[ -d "${MOCK_BIN:-}" ]] && rm -rf "$MOCK_BIN"
-}
-
 # Helper: set up all mocks so doctor passes all core checks
 setup_all_deps() {
     create_mock_command "pw-record"
     create_mock_command "whisper-cli"
     create_mock_command "claude"
+    create_mock_command "pactl" \
+        'case "$1" in info) echo "Server Name: mock"; exit 0 ;; list) echo "mock-source"; exit 0 ;; esac'
     create_mock_command "df" \
         'echo "Filesystem     1K-blocks    Used Available Use% Mounted on"; echo "/dev/sda1      100000000 50000000 10485760  50% /"'
 
@@ -70,6 +56,7 @@ setup_all_deps_with_live() {
 # --- Missing audio backend ---
 
 @test "doctor missing audio backend shows MISSING and exits 1" {
+    isolate_path
     create_mock_command "whisper-cli"
     create_mock_command "claude"
     create_mock_command "df" \
@@ -87,6 +74,7 @@ setup_all_deps_with_live() {
 # --- Missing whisper-cli ---
 
 @test "doctor missing whisper-cli shows MISSING and exits 1" {
+    isolate_path
     create_mock_command "pw-record"
     create_mock_command "claude"
     create_mock_command "df" \
@@ -104,13 +92,15 @@ setup_all_deps_with_live() {
 # --- Missing whisper model ---
 
 @test "doctor missing whisper model shows MISSING and exits 1" {
+    isolate_path
     create_mock_command "pw-record"
     create_mock_command "whisper-cli"
     create_mock_command "claude"
     create_mock_command "df" \
         'echo "Filesystem     1K-blocks    Used Available Use% Mounted on"; echo "/dev/sda1      100000000 50000000 10485760  50% /"'
-    # No WHISPER_CPP_MODEL_DIR set, and no model in default locations
+    # No WHISPER_CPP_MODEL_DIR set; use isolated HOME so real model isn't found
     unset WHISPER_CPP_MODEL_DIR 2>/dev/null || true
+    export HOME="$MEETBALLS_DIR/fakehome"
 
     run "$BIN_DIR/meetballs" doctor
     assert_failure
@@ -120,6 +110,7 @@ setup_all_deps_with_live() {
 # --- Missing claude ---
 
 @test "doctor missing claude shows MISSING and exits 1" {
+    isolate_path
     create_mock_command "pw-record"
     create_mock_command "whisper-cli"
     create_mock_command "df" \
@@ -147,6 +138,7 @@ setup_all_deps_with_live() {
 # --- Low disk space ---
 
 @test "doctor low disk space shows LOW and exits 1" {
+    isolate_path
     create_mock_command "pw-record"
     create_mock_command "whisper-cli"
     create_mock_command "claude"
@@ -187,6 +179,7 @@ setup_all_deps_with_live() {
 }
 
 @test "doctor core-only failure still exits 1 even with live deps present" {
+    isolate_path
     # All live deps present, but missing whisper-cli (core dep)
     create_mock_command "pw-record"
     create_mock_command "claude"
@@ -209,12 +202,7 @@ setup_all_deps_with_live() {
 }
 
 @test "doctor live-only failure exits 0 with warning" {
-    # Use an isolated PATH that excludes /usr/bin to prevent real tmux/dpkg
-    local ISOLATED_BIN="$(mktemp -d)"
-    # Link basic utilities needed by doctor into isolated bin
-    ln -s /usr/bin/awk "$ISOLATED_BIN/awk"
-    ln -s /usr/bin/basename "$ISOLATED_BIN/basename"
-    export PATH="$MOCK_BIN:$ISOLATED_BIN:/bin"
+    isolate_path
 
     # All core deps present
     setup_all_deps
@@ -226,6 +214,4 @@ setup_all_deps_with_live() {
     assert_output --partial "Live mode:"
     assert_output --partial "MISSING"
     assert_output --partial "live-mode"
-
-    rm -rf "$ISOLATED_BIN"
 }

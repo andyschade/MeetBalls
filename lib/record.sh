@@ -18,9 +18,8 @@ _mb_stop_recording() {
 
 _mb_print_summary() {
     if [[ -n "$_OUTPUT_FILE" && -f "$_OUTPUT_FILE" ]]; then
-        local file_size
-        file_size=$(stat -c %s "$_OUTPUT_FILE")
-        local duration_secs=$(( (file_size - 44) / (16000 * 2) ))
+        local duration_secs
+        duration_secs=$(mb_wav_duration "$_OUTPUT_FILE")
         local duration
         duration=$(mb_format_duration "$duration_secs")
         mb_success "Saved: $_OUTPUT_FILE (duration: $duration)"

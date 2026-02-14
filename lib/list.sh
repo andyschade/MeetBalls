@@ -31,13 +31,11 @@ EOF
     # Print table header
     printf "%-35s  %-10s  %s\n" "RECORDING" "DURATION" "TRANSCRIPT"
 
-    local wav basename_noext file_size duration_secs duration transcript_status
+    local wav basename_noext duration_secs duration transcript_status
     for wav in "${wav_files[@]}"; do
         basename_noext="$(basename "$wav" .wav)"
 
-        # Compute duration from WAV file size: (size - 44) / (16000 * 2)
-        file_size=$(stat -c %s "$wav")
-        duration_secs=$(( (file_size - 44) / (16000 * 2) ))
+        duration_secs=$(mb_wav_duration "$wav")
         duration=$(mb_format_duration "$duration_secs")
 
         # Check transcript existence

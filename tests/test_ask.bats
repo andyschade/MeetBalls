@@ -3,20 +3,6 @@
 
 load test_helper
 
-# Use a restricted PATH so only mocked commands are found.
-setup() {
-    export MEETBALLS_DIR="$(mktemp -d)"
-    mkdir -p "$MEETBALLS_DIR/recordings" "$MEETBALLS_DIR/transcripts"
-
-    MOCK_BIN="$(mktemp -d)"
-    export PATH="$MOCK_BIN:/usr/bin:/bin"
-}
-
-teardown() {
-    [[ -d "${MEETBALLS_DIR:-}" ]] && rm -rf "$MEETBALLS_DIR"
-    [[ -d "${MOCK_BIN:-}" ]] && rm -rf "$MOCK_BIN"
-}
-
 # Helper: create a fixture transcript file with known content
 create_fixture_transcript() {
     local name="${1:-test-transcript.txt}"
@@ -67,6 +53,7 @@ exit 0
 # --- Missing claude CLI ---
 
 @test "ask errors when claude CLI not available" {
+    isolate_path
     local transcript_file
     transcript_file=$(create_fixture_transcript)
 

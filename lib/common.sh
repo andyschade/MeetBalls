@@ -54,6 +54,20 @@ mb_check_command() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Require a command to be available, or die with install hint
+mb_require_command() {
+    if ! mb_check_command "$1"; then
+        mb_die "$1 not found. $2"
+    fi
+}
+
+# Require a file to exist, or die with descriptive message
+mb_require_file() {
+    if [[ ! -f "$1" ]]; then
+        mb_die "$2 not found: $1"
+    fi
+}
+
 # Check disk space on MEETBALLS_DIR partition
 # Returns 0 if >=500MB free, 1 if below
 mb_check_disk_space() {
@@ -73,6 +87,7 @@ mb_find_whisper_model() {
     local model_file="ggml-${WHISPER_MODEL}.bin"
     local search_dirs=(
         "${WHISPER_CPP_MODEL_DIR:-}"
+        "$HOME/whisper.cpp/models"
         "$HOME/.local/share/whisper.cpp/models"
         "/usr/local/share/whisper.cpp/models"
     )
@@ -84,6 +99,16 @@ mb_find_whisper_model() {
         fi
     done
     return 1
+}
+
+# Find whisper model or die with download instructions
+mb_require_whisper_model() {
+    local model_path
+    model_path=$(mb_find_whisper_model) || true
+    if [[ -z "$model_path" ]]; then
+        mb_die "Whisper model not found (ggml-${WHISPER_MODEL}.bin). Download: bash ~/whisper.cpp/models/download-ggml-model.sh $WHISPER_MODEL"
+    fi
+    echo "$model_path"
 }
 
 # Detect best available audio backend
@@ -118,13 +143,12 @@ mb_format_duration() {
     fi
 }
 
-# Echo directory paths
-mb_recording_dir() {
-    echo "$RECORDINGS_DIR"
-}
-
-mb_transcript_dir() {
-    echo "$TRANSCRIPTS_DIR"
+# Calculate WAV file duration in seconds from file size
+# Assumes 16kHz, mono, 16-bit PCM with 44-byte header
+mb_wav_duration() {
+    local file_size
+    file_size=$(stat -c %s "$1")
+    echo $(( (file_size - 44) / (16000 * 2) ))
 }
 
 # Echo ISO timestamp for filenames

@@ -27,14 +27,8 @@ EOF
 
     local transcript_file="$1"
 
-    if [[ ! -f "$transcript_file" ]]; then
-        mb_die "Transcript file not found: $transcript_file"
-    fi
-
-    # Check claude CLI is available
-    if ! mb_check_command claude; then
-        mb_die "claude not found. Install Claude Code CLI from https://docs.anthropic.com/en/docs/claude-code"
-    fi
+    mb_require_file "$transcript_file" "Transcript file"
+    mb_require_command claude "Install Claude Code CLI from https://docs.anthropic.com/en/docs/claude-code"
 
     # Read transcript content
     local transcript_content
