@@ -77,6 +77,9 @@ EOF
     local SESSION_DIR="$LIVE_DIR/$TIMESTAMP"
     mkdir -p "$SESSION_DIR"
 
+    # Initialize session state in live dir (pipeline reads/updates this)
+    mb_init_session_state "$SESSION_DIR"
+
     # Session logging
     local LOG_FILE="$SESSION_DIR/session.log"
     local WHISPER_STDERR="$SESSION_DIR/whisper-stream.stderr"
@@ -270,6 +273,146 @@ tmux kill-session -t meetballs-live 2>/dev/null
 EOF
     chmod +x "$SESSION_DIR/asker.sh"
 
+    # Generate pipeline.sh — two-stage background processing pipeline
+    # Stage 1: bash pattern matching on every transcript line (free, instant)
+    # Stage 2: LLM refinement when triggers fire (haiku, cheap)
+    cat > "$SESSION_DIR/pipeline.sh" <<'PIPELINE_EOF'
+#!/usr/bin/env bash
+# MeetBalls — Background processing pipeline
+# Reads new transcript lines via tail -f, applies Stage 1 pattern matching,
+# and calls LLM (Stage 2) when triggers fire to update session-state.md.
+
+SESSION_DIR="__SESSION_DIR__"
+TRANSCRIPT_FILE="$SESSION_DIR/transcript.txt"
+SESSION_STATE="$SESSION_DIR/session-state.md"
+PIPELINE_LOG="$SESSION_DIR/pipeline.log"
+
+log() {
+    printf '[%s] pipeline: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$PIPELINE_LOG"
+}
+
+# --- Stage 1: Pattern matching ---
+# Returns space-separated trigger types, or empty string if no match.
+stage1_detect() {
+    local line="$1"
+    local triggers=""
+
+    # Wake word detection (case-insensitive)
+    if echo "$line" | grep -qi "meetballs"; then
+        triggers="${triggers:+$triggers }wake-word"
+    fi
+
+    # Action-item triggers
+    if echo "$line" | grep -qiE "(I'll|I will|by friday|by monday|by tuesday|by wednesday|by thursday|by saturday|by sunday|by tomorrow|by next week|by end of|take that on|deadline|action item)"; then
+        triggers="${triggers:+$triggers }action-item"
+    fi
+
+    # Decision triggers
+    if echo "$line" | grep -qiE "(agreed|decided|let's go with|lets go with|consensus|final answer|we've decided|we decided|decision is|the call is)"; then
+        triggers="${triggers:+$triggers }decision"
+    fi
+
+    # Initialization triggers (speakers/agenda)
+    if echo "$line" | grep -qiE "(Hi I'm|My name is|I'm [A-Z]|Today we're going to|The agenda is|Let's cover|we'll discuss|we will discuss|nice to meet)"; then
+        triggers="${triggers:+$triggers }initialization"
+    fi
+
+    echo "$triggers"
+}
+
+# --- Stage 2: LLM refinement ---
+# Called when Stage 1 detects triggers. Sends context to haiku for state update.
+stage2_refine() {
+    local triggered_line="$1"
+    local trigger_types="$2"
+
+    # Read current session state
+    local state=""
+    if [[ -f "$SESSION_STATE" ]]; then
+        state=$(<"$SESSION_STATE")
+    fi
+
+    # Read last ~20 lines of transcript for context
+    local context=""
+    if [[ -f "$TRANSCRIPT_FILE" ]]; then
+        context=$(tail -n 20 "$TRANSCRIPT_FILE")
+    fi
+
+    # Build system prompt
+    local system_prompt="You are MeetBalls, a meeting facilitation assistant. Given the current session state and recent transcript context, analyze the triggered line and update the session state.
+
+Only modify sections that need updating. Return the COMPLETE updated session-state.md content.
+
+Trigger types detected: ${trigger_types}
+
+Rules:
+- For 'initialization': extract speaker names into ## Speakers, agenda items into ## Agenda
+- For 'action-item': add to ## Action Items with owner and deadline (format: - [ ] Owner: task (by deadline))
+- For 'decision': add to ## Decisions with context
+- For 'wake-word': parse the command after 'meetballs' and update ## Hat if it's a hat change
+- Keep existing entries — append, don't overwrite
+- Return ONLY the markdown content, no explanations"
+
+    local user_prompt="<session-state>
+${state}
+</session-state>
+
+<recent-transcript>
+${context}
+</recent-transcript>
+
+<triggered-line>
+${triggered_line}
+</triggered-line>"
+
+    log "stage2: triggers=[$trigger_types] line=[${triggered_line:0:80}]"
+
+    # Call haiku via claude CLI
+    local updated_state
+    if updated_state=$(claude -p "$user_prompt" --model haiku --append-system-prompt "$system_prompt" 2>>"$PIPELINE_LOG"); then
+        # Write updated state back — only if we got non-empty output
+        if [[ -n "$updated_state" ]]; then
+            echo "$updated_state" > "$SESSION_STATE"
+            log "stage2: session-state.md updated"
+        else
+            log "stage2: empty response from LLM, skipping update"
+        fi
+    else
+        log "stage2: claude call failed (exit=$?)"
+    fi
+}
+
+# --- Main loop ---
+log "pipeline started"
+
+# Wait for transcript file to appear
+while [[ ! -f "$TRANSCRIPT_FILE" ]]; do
+    sleep 1
+done
+
+log "transcript file detected, starting tail -f"
+
+# Process new lines as they appear
+tail -f "$TRANSCRIPT_FILE" 2>/dev/null | while IFS= read -r line; do
+    # Skip empty lines
+    [[ -z "$line" ]] && continue
+
+    # Stage 1: detect triggers
+    triggers=$(stage1_detect "$line")
+
+    # If any triggers fired, run Stage 2
+    if [[ -n "$triggers" ]]; then
+        log "stage1: triggers=[$triggers] line=[${line:0:80}]"
+        stage2_refine "$line" "$triggers"
+    fi
+done
+
+log "pipeline ended"
+PIPELINE_EOF
+    # Replace placeholder with actual session dir path
+    sed -i "s|__SESSION_DIR__|${SESSION_DIR}|g" "$SESSION_DIR/pipeline.sh"
+    chmod +x "$SESSION_DIR/pipeline.sh"
+
     # Create tmux session and split panes
     mb_info "Starting live session..."
 
@@ -285,10 +428,20 @@ EOF
     # Select top pane and send transcriber command
     tmux select-pane -U -t meetballs-live
     tmux send-keys -t meetballs-live "bash '${SESSION_DIR}/transcriber.sh'" Enter
+    # Launch pipeline as background process (not a tmux pane — runs silently)
+    bash "$SESSION_DIR/pipeline.sh" &
+    local PIPELINE_PID=$!
+    mb_log "pipeline started (pid=$PIPELINE_PID)"
     tmux attach-session -t meetballs-live
     set -e
 
-    # --- Cleanup: save artifacts to per-session folder ---
+    # --- Cleanup: kill pipeline and save artifacts ---
+    if [[ -n "${PIPELINE_PID:-}" ]] && kill -0 "$PIPELINE_PID" 2>/dev/null; then
+        kill "$PIPELINE_PID" 2>/dev/null || true
+        wait "$PIPELINE_PID" 2>/dev/null || true
+        mb_log "pipeline stopped (pid=$PIPELINE_PID)"
+    fi
+
     local FINAL_SESSION_DIR
     FINAL_SESSION_DIR=$(mb_create_session_dir "$TIMESTAMP")
     mb_log "saving session to $FINAL_SESSION_DIR"
@@ -310,8 +463,16 @@ EOF
         cp "$LOG_FILE" "$FINAL_SESSION_DIR/session.log" || true
     fi
 
-    # Initialize session state
-    mb_init_session_state "$FINAL_SESSION_DIR"
+    if [[ -f "$SESSION_DIR/pipeline.log" ]]; then
+        cp "$SESSION_DIR/pipeline.log" "$FINAL_SESSION_DIR/pipeline.log" || true
+    fi
+
+    # Copy pipeline-updated session state, or initialize a blank one
+    if [[ -f "$SESSION_DIR/session-state.md" ]]; then
+        cp "$SESSION_DIR/session-state.md" "$FINAL_SESSION_DIR/session-state.md" || true
+    else
+        mb_init_session_state "$FINAL_SESSION_DIR"
+    fi
 
     echo ""
     mb_info "Session ended."

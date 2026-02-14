@@ -267,6 +267,72 @@ esac'
 
 # --- Q&A logging ---
 
+# --- Pipeline generation ---
+
+@test "live generates pipeline.sh in session directory" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    [[ -f "$session_dir/pipeline.sh" ]]
+    [[ -x "$session_dir/pipeline.sh" ]]
+}
+
+@test "pipeline.sh contains stage1_detect function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "stage1_detect"
+}
+
+@test "pipeline.sh contains stage2_refine function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "stage2_refine"
+}
+
+@test "pipeline.sh has session dir path substituted" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    # Should NOT contain the placeholder
+    refute_output --partial "__SESSION_DIR__"
+    # Should contain the actual live dir path
+    assert_output --partial "$MEETBALLS_DIR/live/"
+}
+
+@test "live initializes session-state.md in live dir" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    [[ -f "$session_dir/session-state.md" ]]
+}
+
+# --- Q&A logging ---
+
 @test "asker.sh contains QA_LOG variable" {
     setup_live_deps
 
