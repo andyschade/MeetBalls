@@ -546,6 +546,65 @@ setup() {
     assert_output --partial "would exceed"
 }
 
+# --- mb_detect_diarization_tier ---
+
+@test "mb_detect_diarization_tier returns tinydiarize when whisper-stream supports it" {
+    isolate_path
+    create_mock_command "whisper-stream" 'echo "  --tinydiarize     [false  ] enable tinydiarize"'
+
+    run mb_detect_diarization_tier
+    assert_success
+    assert_output "tinydiarize"
+}
+
+@test "mb_detect_diarization_tier returns pyannote when no tinydiarize but pyannote installed" {
+    isolate_path
+    # whisper-stream without tinydiarize support
+    create_mock_command "whisper-stream" 'echo "usage: whisper-stream [options]"'
+    # python3 that claims pyannote is installed
+    create_mock_command "python3" '
+if [[ "$1" == "-c" ]] && [[ "$2" == *"pyannote"* ]]; then
+    exit 0
+fi
+exit 1'
+
+    run mb_detect_diarization_tier
+    assert_success
+    assert_output "pyannote"
+}
+
+@test "mb_detect_diarization_tier returns llm-fallback when nothing available" {
+    isolate_path
+    # No whisper-stream, no python3 with pyannote
+
+    run mb_detect_diarization_tier
+    assert_success
+    assert_output "llm-fallback"
+}
+
+@test "mb_detect_diarization_tier returns llm-fallback when whisper-stream exists but no tinydiarize" {
+    isolate_path
+    create_mock_command "whisper-stream" 'echo "usage: whisper-stream [options]"'
+
+    run mb_detect_diarization_tier
+    assert_success
+    assert_output "llm-fallback"
+}
+
+@test "mb_detect_diarization_tier prefers tinydiarize over pyannote" {
+    isolate_path
+    create_mock_command "whisper-stream" 'echo "  --tinydiarize     [false  ] enable tinydiarize"'
+    create_mock_command "python3" '
+if [[ "$1" == "-c" ]] && [[ "$2" == *"pyannote"* ]]; then
+    exit 0
+fi
+exit 1'
+
+    run mb_detect_diarization_tier
+    assert_success
+    assert_output "tinydiarize"
+}
+
 @test "mb_gather_context handles multiple paths" {
     local file1="$MEETBALLS_DIR/a.txt"
     local file2="$MEETBALLS_DIR/b.txt"

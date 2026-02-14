@@ -394,6 +394,60 @@ esac'
 
 # --- Q&A logging ---
 
+# --- Speaker diarization ---
+
+@test "live stores diarize-tier.txt in session directory" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    [[ -f "$session_dir/diarize-tier.txt" ]]
+}
+
+@test "live logs diarization tier" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/session.log"
+    assert_output --partial "diarization tier:"
+}
+
+@test "transcriber.sh includes --tinydiarize when tier is tinydiarize" {
+    setup_live_deps
+    # Override whisper-stream mock to report tinydiarize support
+    create_mock_command "whisper-stream" 'echo "  --tinydiarize     [false  ] enable tinydiarize"'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/transcriber.sh"
+    assert_output --partial "--tinydiarize"
+}
+
+@test "transcriber.sh omits --tinydiarize when tier is llm-fallback" {
+    setup_live_deps
+    # Default whisper-stream mock doesn't report tinydiarize support
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/transcriber.sh"
+    refute_output --partial "--tinydiarize"
+}
+
+# --- Q&A logging ---
+
 @test "asker.sh contains QA_LOG variable" {
     setup_live_deps
 

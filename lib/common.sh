@@ -287,6 +287,31 @@ mb_parse_session_name() {
     SESSION_NAME_TAIL="$rest"
 }
 
+# --- Speaker diarization tier detection ---
+
+# Detect the best available diarization tier.
+# Prints: "tinydiarize", "pyannote", or "llm-fallback"
+# Returns 0 always (llm-fallback is always available).
+mb_detect_diarization_tier() {
+    # Tier 1: whisper-stream --tinydiarize
+    if mb_check_command whisper-stream; then
+        if whisper-stream --help 2>&1 | grep -q "tinydiarize"; then
+            echo "tinydiarize"
+            return 0
+        fi
+    fi
+
+    # Tier 2: pyannote-audio Python package
+    if python3 -c "import pyannote.audio" 2>/dev/null; then
+        echo "pyannote"
+        return 0
+    fi
+
+    # Tier 3: LLM post-process fallback (always works)
+    echo "llm-fallback"
+    return 0
+}
+
 # --- Project context gathering ---
 
 MAX_CONTEXT_BYTES="${MAX_CONTEXT_BYTES:-102400}"

@@ -93,6 +93,18 @@ EOF
         mb_log "project context generated (${#context_paths[@]} paths)"
     fi
 
+    # Detect diarization tier for transcriber configuration
+    local DIARIZE_TIER
+    DIARIZE_TIER=$(mb_detect_diarization_tier)
+    mb_log "diarization tier: $DIARIZE_TIER"
+
+    local TINYDIARIZE_FLAG=""
+    if [[ "$DIARIZE_TIER" == "tinydiarize" ]]; then
+        TINYDIARIZE_FLAG=" --tinydiarize"
+    fi
+    # Store tier so cleanup knows whether to run LLM fallback
+    echo "$DIARIZE_TIER" > "$SESSION_DIR/diarize-tier.txt"
+
     # Generate transcriber.sh (unquoted heredoc — variables expand at write time)
     cat > "$SESSION_DIR/transcriber.sh" <<EOF
 #!/usr/bin/env bash
@@ -166,7 +178,7 @@ while [[ \$retry_count -lt \$max_retries ]] && [[ "\$user_quit" != true ]]; do
         --length 10000 \\
         -f "$SESSION_DIR/transcript.txt" \\
         --save-audio \\
-        -l en 2>>"$SESSION_DIR/whisper-stream.stderr"
+        -l en${TINYDIARIZE_FLAG} 2>>"$SESSION_DIR/whisper-stream.stderr"
 
     exit_code=\$?
     run_duration=\$(( \$(date +%s) - start_time ))
@@ -704,6 +716,72 @@ PIPELINE_EOF
         cp "$SESSION_DIR/session-state.md" "$FINAL_SESSION_DIR/session-state.md" || true
     else
         mb_init_session_state "$FINAL_SESSION_DIR"
+    fi
+
+    # Speaker diarization: LLM post-process fallback
+    # When no real-time diarization was available (tier = llm-fallback), tag the
+    # transcript with speaker names using Sonnet at session end.
+    local saved_tier=""
+    if [[ -f "$SESSION_DIR/diarize-tier.txt" ]]; then
+        saved_tier=$(<"$SESSION_DIR/diarize-tier.txt")
+    fi
+    if [[ "$saved_tier" == "llm-fallback" ]] && [[ -f "$FINAL_SESSION_DIR/transcript.txt" ]]; then
+        local raw_transcript
+        raw_transcript=$(<"$FINAL_SESSION_DIR/transcript.txt")
+        if [[ -n "$raw_transcript" ]]; then
+            mb_info "Tagging transcript with speaker names..."
+            mb_log "diarization: starting LLM post-process fallback"
+
+            local speakers=""
+            if [[ -f "$FINAL_SESSION_DIR/session-state.md" ]]; then
+                # Extract Speakers section content
+                local in_section=false
+                while IFS= read -r line; do
+                    if [[ "$line" == "## Speakers" ]]; then
+                        in_section=true
+                        continue
+                    fi
+                    if [[ "$in_section" == true ]]; then
+                        if [[ "$line" == "## "* ]]; then
+                            break
+                        fi
+                        if [[ -n "$line" ]]; then
+                            speakers="${speakers:+$speakers\n}$line"
+                        fi
+                    fi
+                done < "$FINAL_SESSION_DIR/session-state.md"
+            fi
+
+            local diarize_system="You are a transcript tagger. Given a raw meeting transcript and a list of speakers, produce a speaker-tagged version.
+
+Rules:
+- Tag each line with the most likely speaker: [Speaker] text
+- Use [Unknown] when you cannot determine the speaker
+- Infer speakers from context: who responds to whom, name mentions, speaking patterns
+- Preserve the original text exactly — only add speaker tags
+- Return ONLY the tagged transcript, no explanations"
+
+            local diarize_prompt="<speakers>
+${speakers}
+</speakers>
+
+<transcript>
+${raw_transcript}
+</transcript>"
+
+            local tagged_transcript
+            if tagged_transcript=$(claude -p "$diarize_prompt" --model sonnet --append-system-prompt "$diarize_system" 2>>"${LOG_FILE:-/dev/null}"); then
+                if [[ -n "$tagged_transcript" ]]; then
+                    echo "$tagged_transcript" > "$FINAL_SESSION_DIR/transcript.txt"
+                    mb_log "diarization: transcript tagged with speaker names"
+                    mb_success "Transcript tagged with speaker names."
+                else
+                    mb_log "diarization: empty response from LLM, keeping raw transcript"
+                fi
+            else
+                mb_log "diarization: claude call failed (exit=$?), keeping raw transcript"
+            fi
+        fi
     fi
 
     echo ""
