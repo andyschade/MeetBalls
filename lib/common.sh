@@ -238,6 +238,9 @@ true
 
 ## Research
 
+## Initialized
+false
+
 ## Duration
 EOF
 }

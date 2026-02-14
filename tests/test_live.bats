@@ -331,6 +331,67 @@ esac'
     [[ -f "$session_dir/session-state.md" ]]
 }
 
+@test "pipeline.sh contains parse_wake_command function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "parse_wake_command"
+}
+
+@test "pipeline.sh contains handle_wake_word function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "handle_wake_word"
+}
+
+@test "pipeline.sh contains stage2_wrapup function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "stage2_wrapup"
+}
+
+@test "pipeline.sh contains read_initialized function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "read_initialized"
+}
+
+@test "session-state.md contains Initialized section" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/session-state.md"
+    assert_output --partial "## Initialized"
+    assert_output --partial "false"
+}
+
 # --- Q&A logging ---
 
 @test "asker.sh contains QA_LOG variable" {

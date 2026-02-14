@@ -291,6 +291,70 @@ log() {
     printf '[%s] pipeline: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$PIPELINE_LOG"
 }
 
+# --- Session state helpers ---
+
+# Read a section value from session-state.md (first non-empty line after ## Header)
+read_state_section() {
+    local section="$1"
+    if [[ ! -f "$SESSION_STATE" ]]; then
+        echo ""
+        return
+    fi
+    local in_section=false
+    while IFS= read -r line; do
+        if [[ "$line" == "## $section" ]]; then
+            in_section=true
+            continue
+        fi
+        if [[ "$in_section" == true ]]; then
+            # Stop at next section header
+            if [[ "$line" == "## "* ]]; then
+                break
+            fi
+            # Return first non-empty line
+            if [[ -n "$line" ]]; then
+                echo "$line"
+                return
+            fi
+        fi
+    done < "$SESSION_STATE"
+    echo ""
+}
+
+# Read current hat from session-state.md
+read_hat() {
+    read_state_section "Hat"
+}
+
+# Check if initialization concern is resolved
+read_initialized() {
+    read_state_section "Initialized"
+}
+
+# Check if a section has content (any non-empty lines between ## Header and next ##)
+section_has_content() {
+    local section="$1"
+    if [[ ! -f "$SESSION_STATE" ]]; then
+        return 1
+    fi
+    local in_section=false
+    while IFS= read -r line; do
+        if [[ "$line" == "## $section" ]]; then
+            in_section=true
+            continue
+        fi
+        if [[ "$in_section" == true ]]; then
+            if [[ "$line" == "## "* ]]; then
+                return 1
+            fi
+            if [[ -n "$line" ]] && [[ "$line" != "(none)" ]]; then
+                return 0
+            fi
+        fi
+    done < "$SESSION_STATE"
+    return 1
+}
+
 # --- Stage 1: Pattern matching ---
 # Returns space-separated trigger types, or empty string if no match.
 stage1_detect() {
@@ -312,12 +376,103 @@ stage1_detect() {
         triggers="${triggers:+$triggers }decision"
     fi
 
-    # Initialization triggers (speakers/agenda)
+    # Initialization triggers (speakers/agenda) — suppressed once initialized
     if echo "$line" | grep -qiE "(Hi I'm|My name is|I'm [A-Z]|Today we're going to|The agenda is|Let's cover|we'll discuss|we will discuss|nice to meet)"; then
         triggers="${triggers:+$triggers }initialization"
     fi
 
     echo "$triggers"
+}
+
+# --- Wake word command parsing ---
+# Extracts the command after "meetballs" from a line.
+# Returns: hat name (research|fact-check|timekeeper|wrap-up) or state (mute|unmute) or empty
+parse_wake_command() {
+    local line="$1"
+    # Extract text after "meetballs" (case-insensitive)
+    local after
+    after=$(echo "$line" | sed -n 's/.*[Mm][Ee][Ee][Tt][Bb][Aa][Ll][Ll][Ss]\s*//Ip')
+    # Normalize to lowercase for matching
+    local cmd
+    cmd=$(echo "$after" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//' | cut -d' ' -f1)
+
+    case "$cmd" in
+        research)    echo "research" ;;
+        fact-check|factcheck|fact)  echo "fact-check" ;;
+        timekeeper|timer|time)      echo "timekeeper" ;;
+        wrap-up|wrapup|wrap)        echo "wrap-up" ;;
+        mute)        echo "mute" ;;
+        unmute)      echo "unmute" ;;
+        *)           echo "" ;;
+    esac
+}
+
+# --- Handle wake word commands ---
+# Processes wake word triggers: hat transitions, mute/unmute, wrap-up
+handle_wake_word() {
+    local line="$1"
+    local cmd
+    cmd=$(parse_wake_command "$line")
+
+    case "$cmd" in
+        research)
+            log "hat-transition: research requested"
+            log "research requested: $(echo "$line" | sed -n 's/.*[Mm][Ee][Ee][Tt][Bb][Aa][Ll][Ll][Ss]\s*[Rr]esearch\s*//p')"
+            ;;
+        fact-check)
+            log "hat-transition: fact-check requested"
+            log "fact-check requested: $(echo "$line" | sed -n 's/.*[Mm][Ee][Ee][Tt][Bb][Aa][Ll][Ll][Ss]\s*[^ ]*\s*//p')"
+            ;;
+        timekeeper)
+            log "hat-transition: timekeeper activated"
+            log "timekeeper activated"
+            ;;
+        wrap-up)
+            log "hat-transition: wrap-up triggered"
+            stage2_wrapup
+            return
+            ;;
+        mute)
+            log "state-change: mute"
+            ;;
+        unmute)
+            log "state-change: unmute"
+            ;;
+        *)
+            # Unknown command — let stage2 handle it
+            return 1
+            ;;
+    esac
+
+    # For hat transitions (not mute/unmute), update ## Hat in session-state.md
+    if [[ "$cmd" != "mute" ]] && [[ "$cmd" != "unmute" ]] && [[ "$cmd" != "wrap-up" ]]; then
+        # Active hats are mutually exclusive — new hat replaces current
+        if [[ -f "$SESSION_STATE" ]]; then
+            sed -i '/^## Hat$/,/^## /{/^## Hat$/!{/^## /!s/.*/'"$cmd"'/;}}' "$SESSION_STATE"
+            # sed replaces all lines between ## Hat and next ## — but we only want the value line
+            # Simpler: just replace the line after ## Hat
+            local tmp
+            tmp=$(awk -v hat="$cmd" '
+                /^## Hat$/ { print; getline; print hat; next }
+                { print }
+            ' "$SESSION_STATE")
+            echo "$tmp" > "$SESSION_STATE"
+            log "hat updated to: $cmd"
+        fi
+    elif [[ "$cmd" == "mute" ]] || [[ "$cmd" == "unmute" ]]; then
+        # Update ## Muted section
+        local muted_val="true"
+        [[ "$cmd" == "unmute" ]] && muted_val="false"
+        if [[ -f "$SESSION_STATE" ]]; then
+            local tmp
+            tmp=$(awk -v val="$muted_val" '
+                /^## Muted$/ { print; getline; print val; next }
+                { print }
+            ' "$SESSION_STATE")
+            echo "$tmp" > "$SESSION_STATE"
+            log "muted updated to: $muted_val"
+        fi
+    fi
 }
 
 # --- Stage 2: LLM refinement ---
@@ -338,7 +493,7 @@ stage2_refine() {
         context=$(tail -n 20 "$TRANSCRIPT_FILE")
     fi
 
-    # Build system prompt
+    # Build system prompt with enhanced formatting rules for passive hats
     local system_prompt="You are MeetBalls, a meeting facilitation assistant. Given the current session state and recent transcript context, analyze the triggered line and update the session state.
 
 Only modify sections that need updating. Return the COMPLETE updated session-state.md content.
@@ -346,11 +501,12 @@ Only modify sections that need updating. Return the COMPLETE updated session-sta
 Trigger types detected: ${trigger_types}
 
 Rules:
-- For 'initialization': extract speaker names into ## Speakers, agenda items into ## Agenda
-- For 'action-item': add to ## Action Items with owner and deadline (format: - [ ] Owner: task (by deadline))
-- For 'decision': add to ## Decisions with context
-- For 'wake-word': parse the command after 'meetballs' and update ## Hat if it's a hat change
+- For 'initialization': extract speaker names into ## Speakers (one per line, prefixed with '- '), agenda items into ## Agenda (one per line, prefixed with '- '). Once both Speakers and Agenda have at least one entry each, set ## Initialized to 'true'.
+- For 'action-item': add to ## Action Items with owner and deadline. Format: '- [ ] Owner: task description (by deadline)'. Infer the owner from who is speaking and the deadline from context. If no deadline mentioned, omit the parenthetical.
+- For 'decision': add to ## Decisions with context. Format: '- Decision description — context/reasoning'. Include what was decided and brief context for why.
+- For 'wake-word': parse the command after 'meetballs' and update ## Hat if it's a hat change (research, fact-check, timekeeper). Active hats are mutually exclusive — new hat replaces current.
 - Keep existing entries — append, don't overwrite
+- Preserve all sections including ## Initialized
 - Return ONLY the markdown content, no explanations"
 
     local user_prompt="<session-state>
@@ -382,6 +538,60 @@ ${triggered_line}
     fi
 }
 
+# --- Stage 2: Wrap-up summary (uses sonnet for quality) ---
+stage2_wrapup() {
+    local state=""
+    if [[ -f "$SESSION_STATE" ]]; then
+        state=$(<"$SESSION_STATE")
+    fi
+
+    local transcript=""
+    if [[ -f "$TRANSCRIPT_FILE" ]]; then
+        transcript=$(<"$TRANSCRIPT_FILE")
+    fi
+
+    local system_prompt="You are MeetBalls, a meeting facilitation assistant. The user has triggered a wrap-up. Produce a comprehensive meeting summary.
+
+Include these sections:
+1. **Meeting Summary** — 3-5 sentence overview of what was discussed
+2. **Decisions Made** — bullet list of all decisions from the session state and transcript
+3. **Action Items** — bullet list with owners and deadlines
+4. **Unresolved Questions** — anything that was raised but not answered or decided
+
+Use the session state for structured data (action items, decisions, speakers) and the transcript for narrative context. Be concise but thorough."
+
+    local user_prompt="<session-state>
+${state}
+</session-state>
+
+<transcript>
+${transcript}
+</transcript>"
+
+    log "stage2_wrapup: generating summary with sonnet"
+
+    local summary
+    if summary=$(claude -p "$user_prompt" --model sonnet --append-system-prompt "$system_prompt" 2>>"$PIPELINE_LOG"); then
+        if [[ -n "$summary" ]]; then
+            echo "$summary" > "$SESSION_DIR/summary.txt"
+            log "stage2_wrapup: summary.txt written"
+            # Update hat to wrap-up in session state
+            if [[ -f "$SESSION_STATE" ]]; then
+                local tmp
+                tmp=$(awk '
+                    /^## Hat$/ { print; getline; print "wrap-up"; next }
+                    { print }
+                ' "$SESSION_STATE")
+                echo "$tmp" > "$SESSION_STATE"
+            fi
+        else
+            log "stage2_wrapup: empty response from LLM"
+        fi
+    else
+        log "stage2_wrapup: claude call failed (exit=$?)"
+    fi
+}
+
 # --- Main loop ---
 log "pipeline started"
 
@@ -400,10 +610,32 @@ tail -f "$TRANSCRIPT_FILE" 2>/dev/null | while IFS= read -r line; do
     # Stage 1: detect triggers
     triggers=$(stage1_detect "$line")
 
-    # If any triggers fired, run Stage 2
+    # Suppress initialization triggers once initialized
+    if [[ "$triggers" == *"initialization"* ]]; then
+        local initialized
+        initialized=$(read_initialized)
+        if [[ "$initialized" == "true" ]]; then
+            # Remove initialization from triggers
+            triggers=$(echo "$triggers" | sed 's/initialization//g' | tr -s ' ' | sed 's/^ *//;s/ *$//')
+        fi
+    fi
+
+    # If any triggers fired, process them
     if [[ -n "$triggers" ]]; then
         log "stage1: triggers=[$triggers] line=[${line:0:80}]"
-        stage2_refine "$line" "$triggers"
+
+        # Handle wake word commands directly (hat transitions, mute/unmute, wrap-up)
+        if [[ "$triggers" == *"wake-word"* ]]; then
+            if handle_wake_word "$line"; then
+                # Wake word was handled — remove it from triggers for stage2
+                triggers=$(echo "$triggers" | sed 's/wake-word//g' | tr -s ' ' | sed 's/^ *//;s/ *$//')
+            fi
+        fi
+
+        # Remaining triggers go to stage2 for LLM refinement
+        if [[ -n "$triggers" ]]; then
+            stage2_refine "$line" "$triggers"
+        fi
     fi
 done
 
