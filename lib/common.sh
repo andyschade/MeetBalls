@@ -6,6 +6,7 @@ MEETBALLS_DIR="${MEETBALLS_DIR:-$HOME/.meetballs}"
 RECORDINGS_DIR="$MEETBALLS_DIR/recordings"
 TRANSCRIPTS_DIR="$MEETBALLS_DIR/transcripts"
 LIVE_DIR="$MEETBALLS_DIR/live"
+SESSIONS_DIR="$MEETBALLS_DIR/sessions"
 LOGS_DIR="$MEETBALLS_DIR/logs"
 WHISPER_MODEL="${WHISPER_MODEL:-base.en}"
 MIN_DISK_MB=500
@@ -25,7 +26,7 @@ fi
 
 # Create recordings and transcripts directories
 mb_init() {
-    mkdir -p "$RECORDINGS_DIR" "$TRANSCRIPTS_DIR" "$LIVE_DIR" "$LOGS_DIR"
+    mkdir -p "$RECORDINGS_DIR" "$TRANSCRIPTS_DIR" "$LIVE_DIR" "$SESSIONS_DIR" "$LOGS_DIR"
 }
 
 # Messaging functions
@@ -202,6 +203,85 @@ mb_wav_duration() {
 # Echo ISO timestamp for filenames
 mb_timestamp() {
     date +"%Y-%m-%dT%H-%M-%S"
+}
+
+# --- Session directory helpers ---
+
+# Create a new session directory under SESSIONS_DIR with the given name.
+# If no name given, uses a timestamp. Prints the created path.
+mb_create_session_dir() {
+    local name="${1:-$(mb_timestamp)}"
+    local session_dir="$SESSIONS_DIR/$name"
+    mkdir -p "$session_dir"
+    echo "$session_dir"
+}
+
+# Write a blank session-state.md template to the given directory.
+mb_init_session_state() {
+    local session_dir="$1"
+    cat > "$session_dir/session-state.md" <<'EOF'
+# Session State
+
+## Hat
+listener
+
+## Muted
+true
+
+## Speakers
+
+## Agenda
+
+## Action Items
+
+## Decisions
+
+## Research
+
+## Duration
+EOF
+}
+
+# List session directories sorted newest-first (by directory name).
+# Prints one absolute path per line. Returns 1 if no sessions found.
+mb_scan_sessions() {
+    local sessions=()
+    if [[ -d "$SESSIONS_DIR" ]]; then
+        local entry
+        while IFS= read -r entry; do
+            [[ -d "$entry" ]] && sessions+=("$entry")
+        done < <(find "$SESSIONS_DIR" -mindepth 1 -maxdepth 1 -type d | sort -r)
+    fi
+    if [[ ${#sessions[@]} -eq 0 ]]; then
+        return 1
+    fi
+    printf '%s\n' "${sessions[@]}"
+}
+
+# Parse a session folder name into metadata.
+# Sets variables: SESSION_DATE, SESSION_YEAR, SESSION_TIME, SESSION_PARTICIPANTS, SESSION_TOPIC
+# Input: folder name (not full path), e.g. "feb14-26-0800-andy-sarah-deployment-timeline"
+mb_parse_session_name() {
+    local name="$1"
+    # Format: <mon><dd>-<yy>-<HHMM>-<participants...>-<topic...>
+    # First token: month+day (e.g. feb14)
+    # Second token: 2-digit year
+    # Third token: 4-digit time
+    # Remaining tokens: participants then topic — we can't perfectly distinguish
+    # them without the session-state.md, so we store the raw tail.
+    local IFS='-'
+    read -ra parts <<< "$name"
+    SESSION_DATE="${parts[0]:-}"           # e.g. feb14
+    SESSION_YEAR="${parts[1]:-}"           # e.g. 26
+    SESSION_TIME="${parts[2]:-}"           # e.g. 0800
+    # Everything after the first 3 tokens is participants-and-topic
+    local rest=""
+    local i
+    for (( i=3; i<${#parts[@]}; i++ )); do
+        [[ -n "$rest" ]] && rest+="-"
+        rest+="${parts[$i]}"
+    done
+    SESSION_NAME_TAIL="$rest"
 }
 
 # --- Project context gathering ---

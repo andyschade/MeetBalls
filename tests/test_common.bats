@@ -280,6 +280,141 @@ setup() {
     [ -d "$MEETBALLS_DIR/live" ]
 }
 
+# --- SESSIONS_DIR constant ---
+
+@test "SESSIONS_DIR is MEETBALLS_DIR/sessions" {
+    assert_equal "$SESSIONS_DIR" "$MEETBALLS_DIR/sessions"
+}
+
+# --- mb_init creates sessions directory ---
+
+@test "mb_init creates sessions directory" {
+    rm -rf "$MEETBALLS_DIR/sessions"
+    [ ! -d "$MEETBALLS_DIR/sessions" ]
+
+    mb_init
+
+    [ -d "$MEETBALLS_DIR/sessions" ]
+}
+
+# --- mb_create_session_dir ---
+
+@test "mb_create_session_dir creates named session folder" {
+    mb_init
+    run mb_create_session_dir "feb14-26-0800-andy-sarah-deployment"
+    assert_success
+    assert_output "$SESSIONS_DIR/feb14-26-0800-andy-sarah-deployment"
+    [ -d "$SESSIONS_DIR/feb14-26-0800-andy-sarah-deployment" ]
+}
+
+@test "mb_create_session_dir uses timestamp when no name given" {
+    mb_init
+    run mb_create_session_dir
+    assert_success
+    # Output should be a path under SESSIONS_DIR
+    assert_output --regexp "^$SESSIONS_DIR/.+"
+    # Directory should exist
+    [ -d "$(echo "$output")" ]
+}
+
+@test "mb_create_session_dir is idempotent" {
+    mb_init
+    mb_create_session_dir "test-session"
+    run mb_create_session_dir "test-session"
+    assert_success
+    [ -d "$SESSIONS_DIR/test-session" ]
+}
+
+# --- mb_init_session_state ---
+
+@test "mb_init_session_state creates session-state.md" {
+    mb_init
+    local dir
+    dir=$(mb_create_session_dir "test-session")
+    mb_init_session_state "$dir"
+    [ -f "$dir/session-state.md" ]
+}
+
+@test "mb_init_session_state contains required sections" {
+    mb_init
+    local dir
+    dir=$(mb_create_session_dir "test-session")
+    mb_init_session_state "$dir"
+    run cat "$dir/session-state.md"
+    assert_output --partial "# Session State"
+    assert_output --partial "## Hat"
+    assert_output --partial "listener"
+    assert_output --partial "## Muted"
+    assert_output --partial "true"
+    assert_output --partial "## Speakers"
+    assert_output --partial "## Agenda"
+    assert_output --partial "## Action Items"
+    assert_output --partial "## Decisions"
+    assert_output --partial "## Research"
+    assert_output --partial "## Duration"
+}
+
+# --- mb_scan_sessions ---
+
+@test "mb_scan_sessions returns 1 when no sessions exist" {
+    mb_init
+    run mb_scan_sessions
+    assert_failure
+}
+
+@test "mb_scan_sessions lists session directories" {
+    mb_init
+    mb_create_session_dir "feb10-26-1000-andy-sprint-retro"
+    mb_create_session_dir "feb14-26-0800-andy-sarah-deployment"
+    run mb_scan_sessions
+    assert_success
+    assert_output --partial "feb14-26-0800-andy-sarah-deployment"
+    assert_output --partial "feb10-26-1000-andy-sprint-retro"
+}
+
+@test "mb_scan_sessions sorts newest first" {
+    mb_init
+    mb_create_session_dir "aaa-first"
+    mb_create_session_dir "zzz-last"
+    run mb_scan_sessions
+    assert_success
+    # sort -r means zzz should come before aaa
+    local first_line
+    first_line=$(echo "$output" | head -1)
+    assert_equal "$first_line" "$SESSIONS_DIR/zzz-last"
+}
+
+@test "mb_scan_sessions ignores files (only directories)" {
+    mb_init
+    mb_create_session_dir "real-session"
+    touch "$SESSIONS_DIR/not-a-dir.txt"
+    run mb_scan_sessions
+    assert_success
+    assert_output "$SESSIONS_DIR/real-session"
+}
+
+# --- mb_parse_session_name ---
+
+@test "mb_parse_session_name extracts date, year, time" {
+    mb_parse_session_name "feb14-26-0800-andy-sarah-deployment-timeline"
+    assert_equal "$SESSION_DATE" "feb14"
+    assert_equal "$SESSION_YEAR" "26"
+    assert_equal "$SESSION_TIME" "0800"
+}
+
+@test "mb_parse_session_name extracts tail" {
+    mb_parse_session_name "feb14-26-0800-andy-sarah-deployment-timeline"
+    assert_equal "$SESSION_NAME_TAIL" "andy-sarah-deployment-timeline"
+}
+
+@test "mb_parse_session_name handles minimal name" {
+    mb_parse_session_name "feb14-26-0800"
+    assert_equal "$SESSION_DATE" "feb14"
+    assert_equal "$SESSION_YEAR" "26"
+    assert_equal "$SESSION_TIME" "0800"
+    assert_equal "$SESSION_NAME_TAIL" ""
+}
+
 # --- mb_find_whisper_model ---
 
 @test "mb_find_whisper_model returns path when found via WHISPER_CPP_MODEL_DIR" {
