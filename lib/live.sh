@@ -784,6 +784,174 @@ ${raw_transcript}
         fi
     fi
 
+    # --- Duration calculation ---
+    # Calculate session duration from TIMESTAMP (session start) to now
+    local start_epoch end_epoch duration_secs duration_human
+    start_epoch=$(date -d "${TIMESTAMP/T/ }" +%s 2>/dev/null) || start_epoch=$(date +%s)
+    end_epoch=$(date +%s)
+    duration_secs=$(( end_epoch - start_epoch ))
+    duration_human=$(mb_format_duration "$duration_secs")
+    mb_log "session duration: ${duration_secs}s ($duration_human)"
+
+    # Cache duration in session-state.md
+    if [[ -f "$FINAL_SESSION_DIR/session-state.md" ]]; then
+        local tmp_state
+        tmp_state=$(awk -v dur="$duration_human" '
+            /^## Duration$/ { print; print dur; skip=1; next }
+            skip && /^## / { skip=0 }
+            skip { next }
+            { print }
+        ' "$FINAL_SESSION_DIR/session-state.md")
+        echo "$tmp_state" > "$FINAL_SESSION_DIR/session-state.md"
+        mb_log "duration cached in session-state.md"
+    fi
+
+    # --- Summary generation ---
+    # If wrap-up hat already created summary.txt (in live dir), copy it over
+    if [[ -f "$SESSION_DIR/summary.txt" ]] && [[ ! -f "$FINAL_SESSION_DIR/summary.txt" ]]; then
+        cp "$SESSION_DIR/summary.txt" "$FINAL_SESSION_DIR/summary.txt" || true
+    fi
+
+    # Generate summary if it doesn't exist yet
+    if [[ ! -f "$FINAL_SESSION_DIR/summary.txt" ]] && [[ -f "$FINAL_SESSION_DIR/transcript.txt" ]]; then
+        local transcript_for_summary
+        transcript_for_summary=$(<"$FINAL_SESSION_DIR/transcript.txt")
+        if [[ -n "$transcript_for_summary" ]]; then
+            mb_info "Generating session summary..."
+            mb_log "summary: generating with sonnet"
+
+            local state_for_summary=""
+            if [[ -f "$FINAL_SESSION_DIR/session-state.md" ]]; then
+                state_for_summary=$(<"$FINAL_SESSION_DIR/session-state.md")
+            fi
+
+            local summary_system="You are MeetBalls, a meeting assistant. Generate a concise meeting summary.
+
+Include:
+1. **Meeting Summary** — 3-5 sentence overview of what was discussed
+2. **Decisions Made** — bullet list of decisions
+3. **Action Items** — bullet list with owners and deadlines
+4. **Unresolved Questions** — anything raised but not resolved
+
+Be concise but thorough. Use the session state for structured data and the transcript for narrative context."
+
+            local summary_prompt="<session-state>
+${state_for_summary}
+</session-state>
+
+<transcript>
+${transcript_for_summary}
+</transcript>"
+
+            local generated_summary
+            if generated_summary=$(claude -p "$summary_prompt" --model sonnet --append-system-prompt "$summary_system" 2>>"${LOG_FILE:-/dev/null}"); then
+                if [[ -n "$generated_summary" ]]; then
+                    echo "$generated_summary" > "$FINAL_SESSION_DIR/summary.txt"
+                    mb_log "summary: summary.txt generated"
+                    mb_success "Summary generated."
+                else
+                    mb_log "summary: empty response from LLM, skipping"
+                fi
+            else
+                mb_log "summary: claude call failed (exit=$?), skipping"
+            fi
+        fi
+    fi
+
+    # --- LLM session naming ---
+    # Generate a descriptive session name from the transcript
+    # Format: <date>-<year>-<time>-<participants>-<topic>
+    local descriptive_name=""
+    if [[ -f "$FINAL_SESSION_DIR/transcript.txt" ]]; then
+        local transcript_for_naming
+        transcript_for_naming=$(<"$FINAL_SESSION_DIR/transcript.txt")
+        if [[ -n "$transcript_for_naming" ]]; then
+            mb_log "naming: generating descriptive session name"
+
+            # Extract date/time components from TIMESTAMP (format: YYYY-MM-DDTHH-MM-SS)
+            local ts_date ts_time
+            ts_date=$(echo "$TIMESTAMP" | cut -dT -f1)  # YYYY-MM-DD
+            ts_time=$(echo "$TIMESTAMP" | cut -dT -f2)  # HH-MM-SS
+
+            # Build date prefix: e.g. feb14-26-0800
+            local month_num day year hour minute
+            year=$(echo "$ts_date" | cut -d- -f1)
+            month_num=$(echo "$ts_date" | cut -d- -f2)
+            day=$(echo "$ts_date" | cut -d- -f3)
+            hour=$(echo "$ts_time" | cut -d- -f1)
+            minute=$(echo "$ts_time" | cut -d- -f2)
+
+            # Convert month number to abbreviated name
+            local month_names=(jan feb mar apr may jun jul aug sep oct nov dec)
+            local month_name="${month_names[$((10#$month_num - 1))]}"
+            local year_short="${year:2:2}"
+            local date_prefix="${month_name}${day#0}-${year_short}-${hour}${minute}"
+            # Keep leading zero for day only if >9
+            date_prefix="${month_name}$(( 10#$day ))-${year_short}-${hour}${minute}"
+
+            local state_for_naming=""
+            if [[ -f "$FINAL_SESSION_DIR/session-state.md" ]]; then
+                state_for_naming=$(<"$FINAL_SESSION_DIR/session-state.md")
+            fi
+
+            # Trim transcript for naming — first 50 + last 50 lines if very long
+            local naming_transcript="$transcript_for_naming"
+            local line_count
+            line_count=$(echo "$transcript_for_naming" | wc -l)
+            if (( line_count > 120 )); then
+                naming_transcript="$(echo "$transcript_for_naming" | head -50)
+...
+$(echo "$transcript_for_naming" | tail -50)"
+            fi
+
+            local naming_system="You are generating a session folder name for a meeting. Given the transcript and session state, produce ONLY the participants-and-topic portion of the name.
+
+Rules:
+- Participant names: lowercase, hyphen-separated (e.g., andy-sarah)
+- Topic: up to 5 words, slugified with hyphens (e.g., deployment-timeline-qa-handoff)
+- Participants do NOT count toward the 5-word topic limit
+- Get participant names from the ## Speakers section of session state if available
+- Output format: just the slug, e.g., andy-sarah-deployment-timeline-qa-handoff
+- No date/time prefix — that's added separately
+- Return ONLY the slug, no explanations or formatting"
+
+            local naming_prompt="<session-state>
+${state_for_naming}
+</session-state>
+
+<transcript>
+${naming_transcript}
+</transcript>"
+
+            local name_slug
+            if name_slug=$(claude -p "$naming_prompt" --model sonnet --append-system-prompt "$naming_system" 2>>"${LOG_FILE:-/dev/null}"); then
+                # Clean up: lowercase, only alphanumeric and hyphens, no leading/trailing hyphens
+                name_slug=$(echo "$name_slug" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9-' '-' | sed 's/^-//;s/-$//')
+                if [[ -n "$name_slug" ]]; then
+                    descriptive_name="${date_prefix}-${name_slug}"
+                    mb_log "naming: generated name=$descriptive_name"
+                else
+                    mb_log "naming: empty slug from LLM, using timestamp"
+                fi
+            else
+                mb_log "naming: claude call failed (exit=$?), using timestamp"
+            fi
+        fi
+    fi
+
+    # --- Folder rename ---
+    # Rename from timestamp to descriptive name (if naming succeeded)
+    if [[ -n "$descriptive_name" ]]; then
+        local new_session_dir="$SESSIONS_DIR/$descriptive_name"
+        if [[ ! -d "$new_session_dir" ]]; then
+            mv "$FINAL_SESSION_DIR" "$new_session_dir"
+            FINAL_SESSION_DIR="$new_session_dir"
+            mb_log "session renamed to $FINAL_SESSION_DIR"
+        else
+            mb_log "naming: target dir already exists, keeping timestamp name"
+        fi
+    fi
+
     echo ""
     mb_info "Session ended."
     mb_success "Session saved: $FINAL_SESSION_DIR"
@@ -799,4 +967,9 @@ ${raw_transcript}
     fi
 
     mb_log "session cleanup complete"
+
+    # Re-copy session.log to final dir (captures post-processing logs)
+    if [[ -f "$LOG_FILE" ]]; then
+        cp "$LOG_FILE" "$FINAL_SESSION_DIR/session.log" || true
+    fi
 }

@@ -448,6 +448,232 @@ esac'
 
 # --- Q&A logging ---
 
+# --- Session end: duration ---
+
+@test "live calculates duration and caches in session-state.md" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    local session_dir="${session_dirs[0]}"
+    [[ -f "$session_dir/session-state.md" ]]
+    # Duration section should have a value (not empty)
+    run grep -A1 "## Duration" "$session_dir/session-state.md"
+    assert_success
+    # Should contain a formatted duration (e.g., "0s", "1m00s", etc.)
+    assert_output --partial "s"
+}
+
+@test "live logs session duration" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    run cat "${session_dirs[0]}/session.log"
+    assert_output --partial "session duration:"
+}
+
+# --- Session end: summary generation ---
+
+@test "live generates summary.txt when transcript exists" {
+    setup_live_deps
+    create_mock_command "claude" 'echo "Meeting summary: test discussion."'
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Hello this is a test meeting" > "${_live_dirs[0]}/transcript.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    [[ -f "${session_dirs[0]}/summary.txt" ]]
+}
+
+@test "live skips summary generation if summary.txt already exists" {
+    setup_live_deps
+    create_mock_command "claude" 'echo "LLM output"'
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Test transcript" > "${_live_dirs[0]}/transcript.txt"
+            echo "Existing summary from wrap-up" > "${_live_dirs[0]}/summary.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    # Summary should be the one from wrap-up, not regenerated
+    run cat "${session_dirs[0]}/summary.txt"
+    assert_output --partial "Existing summary from wrap-up"
+}
+
+# --- Session end: LLM naming ---
+
+@test "live renames session folder with descriptive name from LLM" {
+    setup_live_deps
+    create_mock_command "claude" 'echo "andy-sarah-deployment-planning"'
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Test meeting transcript" > "${_live_dirs[0]}/transcript.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    # Session folder should have a descriptive name, not just a timestamp
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    local session_name
+    session_name=$(basename "${session_dirs[0]}")
+    # Should contain the LLM-generated slug
+    [[ "$session_name" == *"andy-sarah-deployment-planning"* ]]
+}
+
+@test "live session name contains date prefix" {
+    setup_live_deps
+    create_mock_command "claude" 'echo "andy-sarah-sprint-retro"'
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Test transcript content" > "${_live_dirs[0]}/transcript.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    local session_name
+    session_name=$(basename "${session_dirs[0]}")
+    # Should start with date prefix pattern: mon<d>-yy-HHMM
+    # e.g., feb14-26-1530-andy-sarah-sprint-retro
+    [[ "$session_name" =~ ^[a-z]{3}[0-9]+-[0-9]{2}-[0-9]{4}- ]]
+}
+
+@test "live falls back to timestamp name on LLM failure" {
+    setup_live_deps
+    create_mock_command "claude" 'exit 1'
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Test transcript content" > "${_live_dirs[0]}/transcript.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    # Session folder should still exist (timestamp-based name)
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    [[ -d "${session_dirs[0]}" ]]
+    # Name should be a timestamp pattern (YYYY-MM-DDTHH-MM-SS)
+    local session_name
+    session_name=$(basename "${session_dirs[0]}")
+    [[ "$session_name" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
+}
+
+@test "live --save-here uses descriptive session name" {
+    setup_live_deps
+    create_mock_command "claude" 'echo "andy-sarah-api-review"'
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Test transcript" > "${_live_dirs[0]}/transcript.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    local save_dir
+    save_dir=$(mktemp -d)
+    cd "$save_dir"
+
+    run "$BIN_DIR/meetballs" live --save-here
+    assert_success
+
+    # The CWD copy should use the descriptive name
+    local copy_dirs=("$save_dir/meetballs"/*)
+    local copy_name
+    copy_name=$(basename "${copy_dirs[0]}")
+    [[ "$copy_name" == *"andy-sarah-api-review"* ]]
+}
+
+@test "live prints descriptive session path on save" {
+    setup_live_deps
+    create_mock_command "claude" 'echo "andy-sarah-standup"'
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Test transcript" > "${_live_dirs[0]}/transcript.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    # Output should show the descriptive name, not just a timestamp
+    assert_output --partial "andy-sarah-standup"
+}
+
+# --- Q&A logging ---
+
 @test "asker.sh contains QA_LOG variable" {
     setup_live_deps
 
