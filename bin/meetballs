@@ -24,10 +24,11 @@ Usage: meetballs <command> [args...]
 
 Commands:
   live         Start a live transcription session with Q&A
+  hist         Browse session history (interactive TUI)
+  clean        Remove recordings to reclaim disk space
   record       Record meeting audio from the microphone
   transcribe   Transcribe a recording to text
   ask          Ask questions about a transcript
-  list         List recordings and transcript status
   logs         View session logs and diagnostic dumps
   update       Pull latest code and check for rebuild needs
   doctor       Check dependencies and system readiness
@@ -67,10 +68,19 @@ case "${1:-}" in
         source "$LIB_DIR/ask.sh"
         cmd_ask "$@"
         ;;
-    list)
+    hist)
         shift
-        source "$LIB_DIR/list.sh"
-        cmd_list "$@"
+        source "$LIB_DIR/hist.sh"
+        cmd_hist "$@"
+        ;;
+    clean)
+        shift
+        source "$LIB_DIR/clean.sh"
+        cmd_clean "$@"
+        ;;
+    list)
+        mb_warn "'meetballs list' is deprecated. Use 'meetballs hist' instead."
+        exit 0
         ;;
     logs)
         shift
