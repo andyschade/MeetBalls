@@ -17,7 +17,7 @@ setup() {
     export HOME="$(mktemp -d)"
 
     # Mock git to avoid actual cloning
-    create_mock_command "git" 'mkdir -p "$4"'
+    create_mock_command "git" 'mkdir -p "$4" 2>/dev/null; exit 0'
 
     # Mock meetballs doctor to avoid real dependency checks
     create_mock_command "meetballs" 'echo "Checking dependencies..."; echo "  audio:       MISSING"; echo "Done."'
@@ -29,6 +29,8 @@ teardown() {
     [[ -d "${HOME:-}" && "$HOME" != "$REAL_HOME" ]] && rm -rf "$HOME"
     export HOME="$REAL_HOME"
 }
+
+# --- Existing tests ---
 
 @test "install.sh exists and is executable" {
     [[ -x "$PROJECT_ROOT/install.sh" ]]
@@ -103,4 +105,125 @@ teardown() {
     run "$PROJECT_ROOT/install.sh"
     assert_success
     assert_output --partial "already installed"
+}
+
+# --- New: --help flag ---
+
+@test "install.sh --help prints usage and exits 0" {
+    run "$PROJECT_ROOT/install.sh" --help
+    assert_success
+    assert_output --partial "Usage:"
+    assert_output --partial "--uninstall"
+    assert_output --partial "WHISPER_CPP_DIR"
+}
+
+@test "install.sh -h prints usage and exits 0" {
+    run "$PROJECT_ROOT/install.sh" -h
+    assert_success
+    assert_output --partial "Usage:"
+}
+
+# --- New: unknown flag ---
+
+@test "install.sh rejects unknown flags" {
+    run "$PROJECT_ROOT/install.sh" --bogus
+    assert_failure
+    assert_output --partial "Unknown option"
+}
+
+# --- New: --uninstall flag ---
+
+@test "install.sh --uninstall removes symlink" {
+    # First install
+    mkdir -p "$HOME/.local/bin"
+    ln -s "$PROJECT_ROOT/bin/meetballs" "$HOME/.local/bin/meetballs"
+
+    run "$PROJECT_ROOT/install.sh" --uninstall
+    assert_success
+    assert_output --partial "Removed symlink"
+    [[ ! -L "$HOME/.local/bin/meetballs" ]]
+}
+
+@test "install.sh --uninstall handles missing symlink gracefully" {
+    run "$PROJECT_ROOT/install.sh" --uninstall
+    assert_success
+    assert_output --partial "No symlink found"
+}
+
+@test "install.sh --uninstall removes state directory" {
+    mkdir -p "$MEETBALLS_DIR/.state"
+    echo "some-commit-hash" > "$MEETBALLS_DIR/.state/whisper-stream-commit"
+
+    run "$PROJECT_ROOT/install.sh" --uninstall
+    assert_success
+    assert_output --partial "Removed state"
+    [[ ! -d "$MEETBALLS_DIR/.state" ]]
+}
+
+@test "install.sh --uninstall prints system packages note" {
+    run "$PROJECT_ROOT/install.sh" --uninstall
+    assert_success
+    assert_output --partial "whisper-stream, tmux, and other system packages were not removed"
+}
+
+# --- New: symlink idempotency ---
+
+@test "install.sh skips symlink when already correct" {
+    # First install creates the symlink
+    run "$PROJECT_ROOT/install.sh"
+    assert_success
+
+    # Second install should detect symlink is already correct
+    run "$PROJECT_ROOT/install.sh"
+    assert_success
+    assert_output --partial "already correct"
+}
+
+# --- New: state recording ---
+
+@test "install.sh creates state directory with repo path" {
+    run "$PROJECT_ROOT/install.sh"
+    assert_success
+    [[ -d "$MEETBALLS_DIR/.state" ]]
+    [[ -f "$MEETBALLS_DIR/.state/repo-path" ]]
+    [[ -f "$MEETBALLS_DIR/.state/installed-at" ]]
+}
+
+# --- New: model verification ---
+
+@test "install.sh reports model not found gracefully" {
+    run "$PROJECT_ROOT/install.sh"
+    assert_success
+    assert_output --partial "model:"
+}
+
+@test "install.sh detects corrupt model file" {
+    # Create a model file that's too small (< 1MB)
+    mkdir -p "$HOME/whisper.cpp/models"
+    echo "corrupt" > "$HOME/whisper.cpp/models/ggml-base.en.bin"
+
+    run "$PROJECT_ROOT/install.sh"
+    assert_success
+    assert_output --partial "CORRUPT"
+}
+
+@test "install.sh verifies valid model file" {
+    # Create a model file that's > 1MB
+    mkdir -p "$HOME/whisper.cpp/models"
+    truncate -s 142M "$HOME/whisper.cpp/models/ggml-base.en.bin"
+
+    run "$PROJECT_ROOT/install.sh"
+    assert_success
+    assert_output --partial "model:    OK"
+    assert_output --partial "142MB"
+}
+
+@test "install.sh records model checksum in state" {
+    # Create a valid-sized model file
+    mkdir -p "$HOME/whisper.cpp/models"
+    truncate -s 2M "$HOME/whisper.cpp/models/ggml-base.en.bin"
+
+    run "$PROJECT_ROOT/install.sh"
+    assert_success
+    [[ -f "$MEETBALLS_DIR/.state/model-base.en.sha256" ]]
 }
