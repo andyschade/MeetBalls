@@ -16,11 +16,11 @@ Opens a tmux split-pane TUI:
   Top pane:    Real-time transcript from whisper-stream
   Bottom pane: Interactive Q&A — ask Claude about the meeting so far
 
-On exit, transcript and audio are saved to ~/.meetballs/.
+On exit, session is saved to ~/.meetballs/sessions/<session-name>/.
 
 Options:
   --context <path>   Add project file/directory as context for Q&A (repeatable)
-  --save-here        Also save transcript, recording, and Q&A log to ./meetballs/
+  --save-here        Also copy session folder to ./meetballs/<session-name>/
   --help             Show this help message
 
 Examples:
@@ -288,58 +288,43 @@ EOF
     tmux attach-session -t meetballs-live
     set -e
 
-    # --- Cleanup ---
-    local saved_transcript=false
-    local saved_recording=false
-    local saved_qa=false
+    # --- Cleanup: save artifacts to per-session folder ---
+    local FINAL_SESSION_DIR
+    FINAL_SESSION_DIR=$(mb_create_session_dir "$TIMESTAMP")
+    mb_log "saving session to $FINAL_SESSION_DIR"
 
+    # Copy artifacts from live temp dir to session folder
     if [[ -f "$SESSION_DIR/transcript.txt" ]]; then
-        cp "$SESSION_DIR/transcript.txt" "$TRANSCRIPTS_DIR/$TIMESTAMP.txt" || true
-        saved_transcript=true
+        cp "$SESSION_DIR/transcript.txt" "$FINAL_SESSION_DIR/transcript.txt" || true
     fi
 
     if ls "$SESSION_DIR"/*.wav 1>/dev/null 2>&1; then
-        cp "$SESSION_DIR"/*.wav "$RECORDINGS_DIR/$TIMESTAMP.wav" || true
-        saved_recording=true
+        cp "$SESSION_DIR"/*.wav "$FINAL_SESSION_DIR/recording.wav" || true
     fi
 
     if [[ -f "$SESSION_DIR/qa.log" ]]; then
-        cp "$SESSION_DIR/qa.log" "$LOGS_DIR/$TIMESTAMP.qa.log" || true
-        saved_qa=true
+        cp "$SESSION_DIR/qa.log" "$FINAL_SESSION_DIR/qa.log" || true
     fi
 
-    # Copy session log to logs directory
     if [[ -f "$LOG_FILE" ]]; then
-        cp "$LOG_FILE" "$LOGS_DIR/$TIMESTAMP.log" || true
+        cp "$LOG_FILE" "$FINAL_SESSION_DIR/session.log" || true
     fi
+
+    # Initialize session state
+    mb_init_session_state "$FINAL_SESSION_DIR"
 
     echo ""
     mb_info "Session ended."
-    if [[ "$saved_transcript" == true ]]; then
-        mb_success "Transcript saved: $TRANSCRIPTS_DIR/$TIMESTAMP.txt"
-    fi
-    if [[ "$saved_recording" == true ]]; then
-        mb_success "Recording saved: $RECORDINGS_DIR/$TIMESTAMP.wav"
-    fi
-    if [[ "$saved_qa" == true ]]; then
-        mb_success "Q&A log saved: $LOGS_DIR/$TIMESTAMP.qa.log"
-    fi
+    mb_success "Session saved: $FINAL_SESSION_DIR"
 
-    # --save-here: copy artifacts to ./meetballs/ in the working directory
+    # --save-here: copy session folder to ./meetballs/<session-name>/ in CWD
     if [[ "$save_here" == true ]]; then
-        mkdir -p ./meetballs
-        if [[ "$saved_transcript" == true ]]; then
-            cp "$TRANSCRIPTS_DIR/$TIMESTAMP.txt" ./meetballs/transcript.txt || true
-            mb_success "Copied transcript to ./meetballs/transcript.txt"
-        fi
-        if [[ "$saved_recording" == true ]]; then
-            cp "$RECORDINGS_DIR/$TIMESTAMP.wav" ./meetballs/recording.wav || true
-            mb_success "Copied recording to ./meetballs/recording.wav"
-        fi
-        if [[ "$saved_qa" == true ]]; then
-            cp "$LOGS_DIR/$TIMESTAMP.qa.log" ./meetballs/qa.log || true
-            mb_success "Copied Q&A log to ./meetballs/qa.log"
-        fi
+        local session_name
+        session_name=$(basename "$FINAL_SESSION_DIR")
+        local save_dest="./meetballs/$session_name"
+        mkdir -p "$save_dest"
+        cp -r "$FINAL_SESSION_DIR"/. "$save_dest/" || true
+        mb_success "Copied session to $save_dest"
     fi
 
     mb_log "session cleanup complete"

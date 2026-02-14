@@ -181,15 +181,35 @@ esac'
     [[ -f "$session_dir/session.log" ]]
 }
 
-@test "live copies session log to logs directory" {
+@test "live saves session to sessions directory" {
     setup_live_deps
 
     run "$BIN_DIR/meetballs" live
     assert_success
 
-    # Should have a log in the logs dir
-    local log_files=("$MEETBALLS_DIR/logs"/*.log)
-    [[ -f "${log_files[0]}" ]]
+    # Should have a session folder under sessions/
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    [[ -d "${session_dirs[0]}" ]]
+}
+
+@test "live creates session-state.md in session folder" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    [[ -f "${session_dirs[0]}/session-state.md" ]]
+}
+
+@test "live copies session log to session folder" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    [[ -f "${session_dirs[0]}/session.log" ]]
 }
 
 # --- --context flag ---
@@ -227,12 +247,8 @@ esac'
 
 # --- --save-here flag ---
 
-@test "live --save-here creates ./meetballs/ directory" {
+@test "live --save-here copies session folder to ./meetballs/<session-name>/" {
     setup_live_deps
-
-    # Create a transcript so there's something to save
-    # We need to pre-create transcript in the session dir that will be made
-    # The mock tmux doesn't actually run transcriber.sh, so we simulate
 
     local save_dir
     save_dir=$(mktemp -d)
@@ -241,8 +257,12 @@ esac'
     run "$BIN_DIR/meetballs" live --save-here
     assert_success
 
-    # The ./meetballs/ directory should have been created
+    # Should have a session subfolder under ./meetballs/
     [[ -d "$save_dir/meetballs" ]]
+    local session_subdirs=("$save_dir/meetballs"/*)
+    [[ -d "${session_subdirs[0]}" ]]
+    # The copied session should contain session-state.md
+    [[ -f "${session_subdirs[0]}/session-state.md" ]]
 }
 
 # --- Q&A logging ---
