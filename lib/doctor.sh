@@ -114,6 +114,36 @@ EOF
         live_failures=$((live_failures + 1))
     fi
 
+    # Speaker diarization checks
+    mb_info ""
+    mb_info "Speaker diarization:"
+
+    # 9. tinydiarize (whisper-stream built-in)
+    local has_tinydiarize=false
+    if mb_check_command whisper-stream; then
+        if whisper-stream --help 2>&1 | grep -q "tinydiarize"; then
+            mb_info "  tinydiarize:    OK (built-in)"
+            has_tinydiarize=true
+        else
+            mb_info "  tinydiarize:    NOT AVAILABLE — whisper-stream lacks --tinydiarize support"
+        fi
+    else
+        mb_info "  tinydiarize:    NOT AVAILABLE — whisper-stream not installed"
+    fi
+
+    # 10. pyannote-audio
+    if python3 -c "import pyannote.audio" 2>/dev/null; then
+        mb_info "  pyannote-audio: OK"
+    else
+        mb_info "  pyannote-audio: NOT INSTALLED"
+        mb_info "                  For better speaker diarization, install pyannote-audio"
+        mb_info "                  (recommended: 8GB+ RAM, dedicated GPU)"
+        mb_info "                  pip install pyannote.audio"
+    fi
+
+    # 11. LLM fallback (always available if claude is present)
+    mb_info "  llm-fallback:   OK (via claude CLI)"
+
     # Summary
     mb_info ""
     if (( core_failures == 0 && live_failures == 0 )); then
