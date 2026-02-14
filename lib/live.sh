@@ -225,6 +225,26 @@ EOF
 #!/usr/bin/env bash
 TRANSCRIPT_FILE="$SESSION_DIR/transcript.txt"
 QA_LOG="$SESSION_DIR/qa.log"
+NOTIFY_FILE="$SESSION_DIR/qa-notifications.txt"
+
+# --- Background notification watcher ---
+# Displays pipeline notifications (action items, decisions, speakers, etc.) inline
+_notify_watcher() {
+    # Create the notifications file if it doesn't exist
+    touch "\$NOTIFY_FILE"
+    tail -f "\$NOTIFY_FILE" 2>/dev/null | while IFS= read -r note; do
+        [[ -z "\$note" ]] && continue
+        echo ""
+        echo "  \$note"
+        echo ""
+        printf "> "
+    done
+}
+_notify_watcher &
+_NOTIFY_PID=\$!
+
+# Cleanup watcher on exit
+trap 'kill \$_NOTIFY_PID 2>/dev/null; tmux kill-session -t meetballs-live 2>/dev/null' EXIT
 
 echo "Meeting Q&A — type a question, or 'quit' to end session"
 echo ""
@@ -279,9 +299,6 @@ Be concise and specific. If the answer isn't in the transcript, say so.
     echo "---" >> "\$QA_LOG"
     echo ""
 done
-
-# Kill tmux session on exit
-tmux kill-session -t meetballs-live 2>/dev/null
 EOF
     chmod +x "$SESSION_DIR/asker.sh"
 
@@ -299,8 +316,17 @@ TRANSCRIPT_FILE="$SESSION_DIR/transcript.txt"
 SESSION_STATE="$SESSION_DIR/session-state.md"
 PIPELINE_LOG="$SESSION_DIR/pipeline.log"
 
+NOTIFY_FILE="$SESSION_DIR/qa-notifications.txt"
+
 log() {
     printf '[%s] pipeline: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$PIPELINE_LOG"
+}
+
+# --- Q&A pane notification ---
+# Writes a formatted notification line to the notifications file.
+# The asker.sh watcher picks these up and displays them inline.
+notify() {
+    echo "$*" >> "$NOTIFY_FILE"
 }
 
 # --- Session state helpers ---
@@ -535,6 +561,9 @@ ${triggered_line}
 
     log "stage2: triggers=[$trigger_types] line=[${triggered_line:0:80}]"
 
+    # Snapshot current state for diff-based notifications
+    local old_state="$state"
+
     # Call haiku via claude CLI
     local updated_state
     if updated_state=$(claude -p "$user_prompt" --model haiku --append-system-prompt "$system_prompt" 2>>"$PIPELINE_LOG"); then
@@ -542,11 +571,102 @@ ${triggered_line}
         if [[ -n "$updated_state" ]]; then
             echo "$updated_state" > "$SESSION_STATE"
             log "stage2: session-state.md updated"
+
+            # Generate notifications for new entries
+            stage2_notify "$old_state" "$updated_state" "$trigger_types"
         else
             log "stage2: empty response from LLM, skipping update"
         fi
     else
         log "stage2: claude call failed (exit=$?)"
+    fi
+}
+
+# --- Stage 2: Notifications ---
+# Diffs old vs new session state and writes notifications for new entries.
+stage2_notify() {
+    local old_state="$1"
+    local new_state="$2"
+    local trigger_types="$3"
+
+    # Helper: extract lines under a section header from state text
+    _section_lines() {
+        local state="$1" section="$2"
+        local in_section=false
+        while IFS= read -r line; do
+            if [[ "$line" == "## $section" ]]; then
+                in_section=true
+                continue
+            fi
+            if [[ "$in_section" == true ]]; then
+                if [[ "$line" == "## "* ]]; then
+                    break
+                fi
+                if [[ -n "$line" ]] && [[ "$line" != "(none)" ]]; then
+                    echo "$line"
+                fi
+            fi
+        done <<< "$state"
+    }
+
+    # Notify on new speakers
+    if [[ "$trigger_types" == *"initialization"* ]]; then
+        local old_speakers new_speakers
+        old_speakers=$(_section_lines "$old_state" "Speakers")
+        new_speakers=$(_section_lines "$new_state" "Speakers")
+        if [[ "$new_speakers" != "$old_speakers" ]] && [[ -n "$new_speakers" ]]; then
+            # Format: strip "- " prefixes, join with ", "
+            local formatted
+            formatted=$(echo "$new_speakers" | sed 's/^- //' | paste -sd', ')
+            notify "👥 Speakers: $formatted"
+            log "notify: speakers updated"
+        fi
+
+        local old_agenda new_agenda
+        old_agenda=$(_section_lines "$old_state" "Agenda")
+        new_agenda=$(_section_lines "$new_state" "Agenda")
+        if [[ "$new_agenda" != "$old_agenda" ]] && [[ -n "$new_agenda" ]]; then
+            local formatted
+            formatted=$(echo "$new_agenda" | sed 's/^- //' | paste -sd', ')
+            notify "📝 Agenda: $formatted"
+            log "notify: agenda updated"
+        fi
+    fi
+
+    # Notify on new action items
+    if [[ "$trigger_types" == *"action-item"* ]]; then
+        local old_items new_items
+        old_items=$(_section_lines "$old_state" "Action Items")
+        new_items=$(_section_lines "$new_state" "Action Items")
+        # Find lines in new that aren't in old
+        local new_line
+        while IFS= read -r new_line; do
+            [[ -z "$new_line" ]] && continue
+            if ! echo "$old_items" | grep -qFx "$new_line"; then
+                # Format: strip "- [ ] " prefix
+                local formatted
+                formatted=$(echo "$new_line" | sed 's/^- \[ \] //')
+                notify "📋 Action Item: $formatted"
+                log "notify: action item added"
+            fi
+        done <<< "$new_items"
+    fi
+
+    # Notify on new decisions
+    if [[ "$trigger_types" == *"decision"* ]]; then
+        local old_decisions new_decisions
+        old_decisions=$(_section_lines "$old_state" "Decisions")
+        new_decisions=$(_section_lines "$new_state" "Decisions")
+        local new_line
+        while IFS= read -r new_line; do
+            [[ -z "$new_line" ]] && continue
+            if ! echo "$old_decisions" | grep -qFx "$new_line"; then
+                local formatted
+                formatted=$(echo "$new_line" | sed 's/^- //')
+                notify "✅ Decision: $formatted"
+                log "notify: decision added"
+            fi
+        done <<< "$new_decisions"
     fi
 }
 
@@ -587,6 +707,7 @@ ${transcript}
         if [[ -n "$summary" ]]; then
             echo "$summary" > "$SESSION_DIR/summary.txt"
             log "stage2_wrapup: summary.txt written"
+            notify "📄 Wrap-up summary generated. See summary.txt for details."
             # Update hat to wrap-up in session state
             if [[ -f "$SESSION_STATE" ]]; then
                 local tmp
@@ -641,12 +762,28 @@ tail -f "$TRANSCRIPT_FILE" 2>/dev/null | while IFS= read -r line; do
             if handle_wake_word "$line"; then
                 # Wake word was handled — remove it from triggers for stage2
                 triggers=$(echo "$triggers" | sed 's/wake-word//g' | tr -s ' ' | sed 's/^ *//;s/ *$//')
+            else
+                # Unknown wake word command — ask for clarification
+                notify "🎩 What hat would you like me to wear for this task?"
+                log "notify: unknown wake word, requesting clarification"
             fi
         fi
 
         # Remaining triggers go to stage2 for LLM refinement
         if [[ -n "$triggers" ]]; then
             stage2_refine "$line" "$triggers"
+        fi
+
+        # Post-stage2: check if initialization is still incomplete and suggest clarification
+        if [[ "$triggers" == *"initialization"* ]]; then
+            if ! section_has_content "Speakers"; then
+                notify "❓ Could you reintroduce the speakers?"
+                log "notify: requesting speaker clarification"
+            fi
+            if ! section_has_content "Agenda"; then
+                notify "❓ Could you restate the agenda?"
+                log "notify: requesting agenda clarification"
+            fi
         fi
     fi
 done
@@ -709,6 +846,10 @@ PIPELINE_EOF
 
     if [[ -f "$SESSION_DIR/pipeline.log" ]]; then
         cp "$SESSION_DIR/pipeline.log" "$FINAL_SESSION_DIR/pipeline.log" || true
+    fi
+
+    if [[ -f "$SESSION_DIR/qa-notifications.txt" ]]; then
+        cp "$SESSION_DIR/qa-notifications.txt" "$FINAL_SESSION_DIR/qa-notifications.txt" || true
     fi
 
     # Copy pipeline-updated session state, or initialize a blank one

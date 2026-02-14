@@ -686,3 +686,200 @@ esac'
     assert_output --partial "QA_LOG"
     assert_output --partial "qa.log"
 }
+
+# --- Q&A pane notifications ---
+
+@test "pipeline.sh contains NOTIFY_FILE variable" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "NOTIFY_FILE"
+    assert_output --partial "qa-notifications.txt"
+}
+
+@test "pipeline.sh contains notify function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "notify()"
+}
+
+@test "pipeline.sh contains stage2_notify function" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "stage2_notify"
+}
+
+@test "pipeline.sh generates action item notifications" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "Action Item:"
+}
+
+@test "pipeline.sh generates decision notifications" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "Decision:"
+}
+
+@test "pipeline.sh generates speaker notifications" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "Speakers:"
+}
+
+@test "pipeline.sh generates agenda notifications" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "Agenda:"
+}
+
+@test "pipeline.sh generates wrap-up notification" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "Wrap-up summary generated"
+}
+
+@test "pipeline.sh generates clarification for missing speakers" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "Could you reintroduce the speakers?"
+}
+
+@test "pipeline.sh generates clarification for missing agenda" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "Could you restate the agenda?"
+}
+
+@test "pipeline.sh generates unknown wake word clarification" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/pipeline.sh"
+    assert_output --partial "What hat would you like me to wear"
+}
+
+@test "asker.sh contains notification watcher" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/asker.sh"
+    assert_output --partial "NOTIFY_FILE"
+    assert_output --partial "qa-notifications.txt"
+}
+
+@test "asker.sh starts background tail -f on notifications file" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/asker.sh"
+    assert_output --partial "tail -f"
+    assert_output --partial "NOTIFY_FILE"
+}
+
+@test "asker.sh cleans up notification watcher on exit" {
+    setup_live_deps
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/live"/*)
+    local session_dir="${session_dirs[0]}"
+    run cat "$session_dir/asker.sh"
+    assert_output --partial "_NOTIFY_PID"
+    assert_output --partial "trap"
+}
+
+@test "live copies qa-notifications.txt to session folder" {
+    setup_live_deps
+    create_mock_command "tmux" '
+echo "tmux $*" >> "$MEETBALLS_DIR/.tmux-calls"
+case "$1" in
+    has-session) exit ${TMUX_HAS_SESSION_EXIT:-1} ;;
+    attach-session)
+        _live_dirs=("$MEETBALLS_DIR/live"/*)
+        if [[ -d "${_live_dirs[0]}" ]]; then
+            echo "Test notification" > "${_live_dirs[0]}/qa-notifications.txt"
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac'
+
+    run "$BIN_DIR/meetballs" live
+    assert_success
+
+    local session_dirs=("$MEETBALLS_DIR/sessions"/*)
+    [[ -f "${session_dirs[0]}/qa-notifications.txt" ]]
+}
