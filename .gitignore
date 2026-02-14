@@ -1,1 +1,7 @@
 tests/libs/
+.claude/
+.ralph/
+*.wav
+*.swp
+*.swo
+*~
